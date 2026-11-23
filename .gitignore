@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.astro/
+.strapi/
+.tmp/
+.cache/
+*.tsbuildinfo
+
+# Environment files: real values never go in git, examples do
+.env
+.env.*
+!.env.example
+
+# Test and audit output
+coverage/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+.lighthouseci/
+
+# Logs
+*.log
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

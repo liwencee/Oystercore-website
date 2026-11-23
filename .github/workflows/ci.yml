@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # Same host port as docker-compose.dev.yml, so tests use one DB port everywhere.
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: oc_ci_root
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # gitleaks scans the whole history, not just the latest commit.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # A service container cannot mount repo files, so run the dev init script
+      # inside it. This creates oc_dev and oc_test, the same as docker-compose.dev.yml.
+      - name: Create databases
+        run: >-
+          docker exec -i "$(docker ps -q --filter ancestor=mariadb:11.4)"
+          mariadb -uroot -poc_ci_root < docker/initdb/01-databases.sql
+
+      - run: pnpm typecheck
+
+      - run: pnpm test
+
+      - run: pnpm build
+
+      # The two checks below still run if an earlier step failed, so one run reports everything.
+      - name: Audit dependencies
+        if: ${{ !cancelled() }}
+        run: pnpm audit --audit-level=high
+
+      - name: Scan for secrets (gitleaks)
+        if: ${{ !cancelled() }}
+        run: >-
+          docker run --rm -v "$GITHUB_WORKSPACE:/repo"
+          ghcr.io/gitleaks/gitleaks:v8.30.1 git --verbose --redact /repo
