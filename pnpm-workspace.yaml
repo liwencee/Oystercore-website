@@ -10,3 +10,28 @@ allowBuilds:
   core-js-pure: false
   esbuild: true
   sharp: true
+
+# Security fixes forced onto transitive dependencies (pnpm audit --audit-level=high).
+# sharp: Astro 6 asks for ^0.34, which has three high advisories. 0.35.5 is the patched
+#   release that Strapi already uses. Astro's image optimiser is also switched off
+#   (image service is passthrough in apps/web/astro.config.mjs).
+# zod 4.x: Strapi pins 4.4.3. 4.6.7 is the patched release of the same major.
+# zod 3.25.76 (koa-body, koa-session) is NOT overridden: koa-session 7.0.2 is its latest
+#   release, needs zod 3, and fails at load on zod 4 ("args is not a function"), so Strapi
+#   would not boot. See auditConfig below.
+overrides:
+  sharp@<0.35.5: 0.35.5
+  zod@>=4 <4.6.6: 4.6.7
+
+# Advisories that audit reports but that cannot be fixed yet. Exact GHSA ids only, never a
+# blanket ignore, and never a lower --audit-level.
+auditConfig:
+  ignoreGhsas:
+    # TEMPORARY until the Astro 7 upgrade (ledger R18); remove then.
+    # Astro 7 needs Node >=22.23.4, which the dev machine lacks. The first one is also
+    # mitigated now: the image service is passthrough, so the AVIF optimiser is unreachable.
+    - GHSA-26w7-cxv4-gfx2 # astro <7.2.8: remote code execution through AVIF image optimisation
+    - GHSA-qh8j-hqjv-7m4x # @astrojs/node <=11.1.2: a malformed Host port can crash the server
+    # TEMPORARY until Strapi moves koa-session off zod 3 (zod 3 has no patched release); remove then.
+    # Not reachable from requests: zod only validates koa-body and koa-session options once at startup.
+    - GHSA-mrhx-c7xc-m3w5 # zod <4.6.6, here 3.25.76: memory exhaustion on oversized constrained collections
