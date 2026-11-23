@@ -4,11 +4,17 @@
   "private": true,
   "packageManager": "pnpm@12.21.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "scripts": {
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
-    "build": "pnpm -r build"
+    "typecheck": "pnpm --filter @oc/shared build && pnpm -r typecheck && tsc --noEmit",
+    "test": "pnpm --filter @oc/shared build && pnpm -r test",
+    "build": "pnpm -r build",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/node": "^22",
+    "typescript": "~5.9.3"
   }
 }

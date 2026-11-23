@@ -1,3 +1,12 @@
 packages:
   - apps/*
   - packages/*
+
+# pnpm 12 blocks dependency build scripts unless a package is listed here.
+# sharp, esbuild and @swc/core need theirs (native binaries). core-js-pure only
+# prints a donation banner, so it is denied explicitly; otherwise install fails.
+allowBuilds:
+  '@swc/core': true
+  core-js-pure: false
+  esbuild: true
+  sharp: true
