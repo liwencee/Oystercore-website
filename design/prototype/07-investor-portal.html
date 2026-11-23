@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Investor portal</title>
+<script src="22cd3932-eab5-404f-891f-0e20c30a598d"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("d61d891e-ef61-4f0b-8a8b-5320df4b9e92") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("cab298ec-4909-4b34-81e0-02f3f3687816") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("e9cc8489-4f52-4714-93f3-9c2c62123a5a") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("17060bac-f89c-4cff-a045-a848bc930616") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("bea31e6e-ec37-44a5-8500-b0bcb96437b4") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("f8df8ac5-dff5-4f4a-9c7e-facf79a14040") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("eca85e57-bb67-4553-83ac-ca20466ae631") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("d61d891e-ef61-4f0b-8a8b-5320df4b9e92") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("cab298ec-4909-4b34-81e0-02f3f3687816") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("e9cc8489-4f52-4714-93f3-9c2c62123a5a") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("17060bac-f89c-4cff-a045-a848bc930616") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("bea31e6e-ec37-44a5-8500-b0bcb96437b4") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("f8df8ac5-dff5-4f4a-9c7e-facf79a14040") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("eca85e57-bb67-4553-83ac-ca20466ae631") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("d61d891e-ef61-4f0b-8a8b-5320df4b9e92") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("cab298ec-4909-4b34-81e0-02f3f3687816") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("e9cc8489-4f52-4714-93f3-9c2c62123a5a") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("17060bac-f89c-4cff-a045-a848bc930616") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("bea31e6e-ec37-44a5-8500-b0bcb96437b4") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("f8df8ac5-dff5-4f4a-9c7e-facf79a14040") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("eca85e57-bb67-4553-83ac-ca20466ae631") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("ba5c4cdb-490b-41ff-9d26-746869aeb3d0") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("812c0dba-a847-4f9e-af99-e9fccaa243c7") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("c25c6620-a121-418d-9c3e-2df62d686c41") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("e4f61851-7cde-4bac-b271-d547be42a8f0") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("4e2f8c30-fc88-409c-b98b-f5475688092c") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fa2d3f75-b173-4880-b863-38ed589a41f3") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("ba5c4cdb-490b-41ff-9d26-746869aeb3d0") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("812c0dba-a847-4f9e-af99-e9fccaa243c7") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("c25c6620-a121-418d-9c3e-2df62d686c41") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("e4f61851-7cde-4bac-b271-d547be42a8f0") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("4e2f8c30-fc88-409c-b98b-f5475688092c") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fa2d3f75-b173-4880-b863-38ed589a41f3") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("ba5c4cdb-490b-41ff-9d26-746869aeb3d0") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("812c0dba-a847-4f9e-af99-e9fccaa243c7") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("c25c6620-a121-418d-9c3e-2df62d686c41") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("e4f61851-7cde-4bac-b271-d547be42a8f0") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("4e2f8c30-fc88-409c-b98b-f5475688092c") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("fa2d3f75-b173-4880-b863-38ed589a41f3") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+</style>
+<style>
+body{margin:0}
+a,button{cursor:pointer}
+a:hover{opacity:.88}
+:focus-visible{outline:2px solid #FFFFFF;outline-offset:0;box-shadow:0 0 0 5px #0B1F3A}
+@media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important}}
+a{color:inherit;text-decoration:none}
+</style>
+</helmet>
+<div style="font-family: 'Inter', system-ui, sans-serif; background: #0B1F3A; color: #0B1F3A; line-height: 1.6;">
+  <dc-import name="Header" hint-size="100%,120px"></dc-import>
+
+  <section style="background: #0B1F3A; color: #FFFFFF;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 56px 40px 72px;">
+      <p style="margin: 0 0 18px; font-size: 14px; color: #C9D2E0;"><a href="Main.dc.html" style="text-decoration: underline;">Home</a> / Investor relations</p>
+      <h1 style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 52px; line-height: 1.08; letter-spacing: -0.02em;">Investor relations</h1>
+      <p style="margin: 18px 0 0; max-width: 720px; font-size: 19px; color: #C9D2E0;">[Statement on the group, its governance and how it reports to investors, approved by OysterCore.]</p>
+    </div>
+  </section>
+
+  <section style="background: #FFFFFF;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 88px 40px 72px; display: flex; flex-wrap: wrap; gap: 56px; align-items: flex-start;">
+      <div style="flex: 1.5 1 560px; min-width: 0;">
+        <p style="margin: 0 0 14px; color: #8A6A1C; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">The group at a glance</p>
+        <h2 style="margin: 0 0 28px; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 36px; line-height: 1.15; letter-spacing: -0.01em;">Public information for everyone.</h2>
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin-bottom: 36px;">
+          <sc-for list="{{facts}}" as="f" hint-placeholder-count="3">
+            <div style="background: #F2F4F8; border-radius: 6px; padding: 22px;">
+              <p style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 34px; line-height: 1;">{{f.value}}</p>
+              <p style="margin: 8px 0 0; font-size: 14px; color: #4B5668;">{{f.label}}</p>
+            </div>
+          </sc-for>
+        </div>
+        <p style="margin: 0 0 14px; font-size: 17px; color: #3B4658;">[Public overview paragraph: group strategy, governance and how the companies fit together.]</p>
+        <a href="#" style="font-weight: 700; border-bottom: 2px solid #C9A24B;">Read about governance</a>
+      </div>
+
+      <div style="flex: 1 1 400px; min-width: 0; background: #0B1F3A; color: #FFFFFF; border-radius: 6px; padding: 36px;">
+        <div style="display: flex; gap: 8px; margin-bottom: 28px; background: #14305C; border-radius: 6px; padding: 4px;">
+          <sc-for list="{{modes}}" as="m" hint-placeholder-count="2">
+            <button sc-camel-on-click="{{m.pick}}" aria-pressed="{{m.on}}" style="flex: 1 1 0; min-height: 44px; border: 0; border-radius: 4px; background: {{m.bg}}; color: {{m.fg}}; font-family: 'Inter', sans-serif; font-weight: 700; font-size: 15px; cursor: pointer;">{{m.label}}</button>
+          </sc-for>
+        </div>
+        <sc-if value="{{signIn}}" hint-placeholder-val="{{true}}">
+          <div>
+            <p style="margin: 0 0 18px; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 24px;">Investor sign-in</p>
+            <p style="margin: 0 0 6px; font-weight: 600; font-size: 14px;">Email address</p>
+            <div style="border: 1.5px solid #5F7799; border-radius: 4px; padding: 13px 14px; color: #C9D2E0; font-size: 15px;">name@organisation.com</div>
+            <p style="margin: 18px 0 6px; font-weight: 600; font-size: 14px;">Password</p>
+            <div style="border: 1.5px solid #5F7799; border-radius: 4px; padding: 13px 14px; color: #C9D2E0; font-size: 15px;">••••••••••</div>
+            <span style="display: block; margin-top: 26px; background: #C9A24B; color: #0B1F3A; font-weight: 700; padding: 16px 28px; border-radius: 4px; text-align: center;">Sign in</span>
+          </div>
+        </sc-if>
+        <sc-if value="{{requestAccess}}" hint-placeholder-val="{{false}}">
+          <div>
+            <p style="margin: 0 0 8px; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 24px;">Request access</p>
+            <p style="margin: 0 0 18px; font-size: 14px; color: #C9D2E0;">The investor relations team reviews each request and replies by email.</p>
+            <div style="display: flex; flex-direction: column; gap: 14px;">
+              <sc-for list="{{fields}}" as="f" hint-placeholder-count="4">
+                <div>
+                  <p style="margin: 0 0 6px; font-weight: 600; font-size: 14px;">{{f}}</p>
+                  <div style="border: 1.5px solid #5F7799; border-radius: 4px; padding: 13px 14px; min-height: 24px;"></div>
+                </div>
+              </sc-for>
+            </div>
+            <span style="display: block; margin-top: 24px; background: #C9A24B; color: #0B1F3A; font-weight: 700; padding: 16px 28px; border-radius: 4px; text-align: center;">Send request</span>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </section>
+
+  <section style="background: #F2F4F8;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 88px 40px;">
+      <p style="margin: 0 0 14px; color: #8A6A1C; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">Investor resources</p>
+      <h2 style="margin: 0 0 12px; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 36px; line-height: 1.15; letter-spacing: -0.01em;">Reports and presentations.</h2>
+      <p style="margin: 0 0 36px; max-width: 700px; font-size: 16px; color: #3B4658;">These documents are available to approved investors after sign-in.</p>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;">
+        <sc-for list="{{docs}}" as="d" hint-placeholder-count="6">
+          <div style="display: flex; align-items: center; gap: 18px; background: #FFFFFF; border: 1px solid #E3E7EE; border-radius: 6px; padding: 20px 24px;">
+            <span style="flex: none; width: 44px; height: 44px; border-radius: 4px; background: #ECEFF4; display: inline-flex; align-items: center; justify-content: center;">
+              <svg width="20" height="20" sc-camel-view-box="0 0 24 24" fill="none" stroke="#0B1F3A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>
+            </span>
+            <div style="flex: 1 1 auto; min-width: 0;">
+              <p style="margin: 0; font-weight: 700; font-size: 16px;">{{d.name}}</p>
+              <p style="margin: 2px 0 0; font-size: 13px; color: #4B5668;">PDF · [Year] · Investors only</p>
+            </div>
+            <span style="font-weight: 700; font-size: 14px; color: #4B5668;">Sign in to download</span>
+          </div>
+        </sc-for>
+      </div>
+      <div style="margin-top: 36px; background: #FFFFFF; border: 1px solid #E3E7EE; border-radius: 6px; padding: 24px 28px; font-size: 14px; color: #4B5668;">
+        <strong style="color: #0B1F3A;">Important notice.</strong> [Disclaimer and forward-looking statements wording, supplied by OysterCore's legal reviewer.]
+      </div>
+    </div>
+  </section>
+
+  <section style="background: #FFFFFF;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 72px 40px; display: flex; flex-wrap: wrap; gap: 32px; align-items: center; justify-content: space-between;">
+      <div>
+        <h2 style="margin: 0 0 8px; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 28px;">Investor relations contact</h2>
+        <p style="margin: 0; font-size: 16px; color: #3B4658;">[Name] · [Email] · [Phone]. We reply within [response time].</p>
+      </div>
+      <a href="Contact.dc.html" style="background: #C9A24B; color: #0B1F3A; font-weight: 700; padding: 16px 28px; border-radius: 4px;">Send an investor enquiry</a>
+    </div>
+  </section>
+
+  <dc-import name="Footer" hint-size="100%,470px"></dc-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:2300}}">
+class Component extends DCLogic {
+  state = { mode: 'signin' };
+  renderVals() {
+    const mode = this.state.mode;
+    const defs = [{ key: 'signin', label: 'Sign in' }, { key: 'request', label: 'Request access' }];
+    return {
+      modes: defs.map((d) => {
+        const on = mode === d.key;
+        return { label: d.label, on, bg: on ? '#C9A24B' : 'transparent', fg: on ? '#0B1F3A' : '#FFFFFF', pick: () => this.setState({ mode: d.key }) };
+      }),
+      signIn: mode === 'signin',
+      requestAccess: mode === 'request',
+      fields: ['Full name', 'Organisation', 'Work email', 'Why you are requesting access'],
+      facts: [
+        { value: '10', label: 'Companies in the group' },
+        { value: '00', label: '[Key figure to confirm]' },
+        { value: '00', label: '[Key figure to confirm]' },
+      ],
+      docs: [
+        { name: 'Annual report' }, { name: 'Financial statements' }, { name: 'Investor presentation' },
+        { name: 'ESG report' }, { name: 'Governance charter' }, { name: 'Group profile and strategy' },
+      ],
+    };
+  }
+}
+</script>
+
+
+</body></html>

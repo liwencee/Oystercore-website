@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Contact, quote and booking</title>
+<script src="ac0477b7-b102-4312-8f29-d5ed6a4c2a93"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("dd60fae3-2a92-41cb-89ee-f0a0eaa8dd4e") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("f0b9021e-2e4a-4b4e-9523-4fc74906f497") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("be320716-5745-4d09-9aa4-7f57711badd7") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("b24d8539-cb45-435e-8f45-10de7e0f349e") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("ed27a032-f0af-453a-bd7f-6ae1debe24a9") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("9a0015e8-8794-4673-87b0-f3113d5ca750") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("cfc37c46-853b-4bc0-b053-7419282298d1") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("dd60fae3-2a92-41cb-89ee-f0a0eaa8dd4e") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("f0b9021e-2e4a-4b4e-9523-4fc74906f497") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("be320716-5745-4d09-9aa4-7f57711badd7") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("b24d8539-cb45-435e-8f45-10de7e0f349e") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("ed27a032-f0af-453a-bd7f-6ae1debe24a9") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("9a0015e8-8794-4673-87b0-f3113d5ca750") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("cfc37c46-853b-4bc0-b053-7419282298d1") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("dd60fae3-2a92-41cb-89ee-f0a0eaa8dd4e") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("f0b9021e-2e4a-4b4e-9523-4fc74906f497") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("be320716-5745-4d09-9aa4-7f57711badd7") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("b24d8539-cb45-435e-8f45-10de7e0f349e") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("ed27a032-f0af-453a-bd7f-6ae1debe24a9") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("9a0015e8-8794-4673-87b0-f3113d5ca750") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("cfc37c46-853b-4bc0-b053-7419282298d1") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("f0b05766-49c9-4994-b40c-3cee82c2065b") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("4d719cd9-2d95-4ea5-b131-7eebaee6f7a4") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("b0881e31-64b4-4aa1-bc29-9402e90e4497") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("e243544f-b5f7-450d-bc6e-9688c6c1f129") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("d42a35f5-1a20-4aec-a67f-6b37f217ef2f") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("938c0a39-9151-423d-a0c4-8e002a93cc38") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("f0b05766-49c9-4994-b40c-3cee82c2065b") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("4d719cd9-2d95-4ea5-b131-7eebaee6f7a4") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("b0881e31-64b4-4aa1-bc29-9402e90e4497") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("e243544f-b5f7-450d-bc6e-9688c6c1f129") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("d42a35f5-1a20-4aec-a67f-6b37f217ef2f") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("938c0a39-9151-423d-a0c4-8e002a93cc38") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("f0b05766-49c9-4994-b40c-3cee82c2065b") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("4d719cd9-2d95-4ea5-b131-7eebaee6f7a4") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("b0881e31-64b4-4aa1-bc29-9402e90e4497") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("e243544f-b5f7-450d-bc6e-9688c6c1f129") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("d42a35f5-1a20-4aec-a67f-6b37f217ef2f") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("938c0a39-9151-423d-a0c4-8e002a93cc38") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+</style>
+<style>
+body{margin:0}
+a,button{cursor:pointer}
+a:hover{opacity:.88}
+:focus-visible{outline:2px solid #FFFFFF;outline-offset:0;box-shadow:0 0 0 5px #0B1F3A}
+@media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important}}
+a{color:inherit;text-decoration:none}
+</style>
+</helmet>
+<div style="font-family: 'Inter', system-ui, sans-serif; background: #0B1F3A; color: #0B1F3A; line-height: 1.6;">
+  <dc-import name="Header" active="contact" hint-size="100%,120px"></dc-import>
+
+  <section style="background: #0B1F3A; color: #FFFFFF;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 56px 40px 64px;">
+      <p style="margin: 0 0 18px; font-size: 14px; color: #C9D2E0;"><a href="Main.dc.html" style="text-decoration: underline;">Home</a> / Contact</p>
+      <h1 style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 52px; line-height: 1.08; letter-spacing: -0.02em;">Let us help you get started.</h1>
+      <p style="margin: 18px 0 0; max-width: 700px; font-size: 19px; color: #C9D2E0;">Send an enquiry, request a quote or book a consultation. Each request is routed to the right company in the group.</p>
+    </div>
+  </section>
+
+  <section style="background: #C9A24B; color: #0B1F3A;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 18px 40px; display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; justify-content: space-between;">
+      <span style="font-weight: 700;">Emergency line, available [hours]</span>
+      <span style="font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 22px;">[Emergency number]</span>
+    </div>
+  </section>
+
+  <section style="background: #F2F4F8;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 64px 40px 96px; display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-start;">
+
+      <div style="flex: 1.3 1 600px; min-width: 0; background: #FFFFFF; border: 1px solid #E3E7EE; border-radius: 6px;">
+        <div role="tablist" aria-label="How can we help" style="display: flex; flex-wrap: wrap; gap: 4px 28px; padding: 0 32px; border-bottom: 1px solid #E3E7EE;">
+          <sc-for list="{{tabs}}" as="t" hint-placeholder-count="3">
+            <button role="tab" sc-camel-on-click="{{t.pick}}" aria-selected="{{t.selected}}" style="background: none; border: 0; border-bottom: 3px solid {{t.line}}; padding: 22px 2px 16px; font-family: 'Inter', sans-serif; font-weight: 700; font-size: 15px; color: #0B1F3A; cursor: pointer;">{{t.label}}</button>
+          </sc-for>
+        </div>
+        <div style="padding: 32px;">
+
+          <sc-if value="{{showEnquiry}}" hint-placeholder-val="{{true}}">
+            <div>
+              <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px;">
+                <sc-for list="{{enquiryFields}}" as="f" hint-placeholder-count="6">
+                  <div>
+                    <p style="margin: 0 0 6px; font-weight: 600; font-size: 14px;">{{f}}</p>
+                    <div style="border: 1.5px solid #8892A3; border-radius: 4px; padding: 13px 14px; min-height: 24px;"></div>
+                  </div>
+                </sc-for>
+              </div>
+              <p style="margin: 18px 0 6px; font-weight: 600; font-size: 14px;">Message</p>
+              <div style="border: 1.5px solid #8892A3; border-radius: 4px; height: 120px;"></div>
+              <div style="margin-top: 20px; display: flex; gap: 12px; align-items: flex-start; font-size: 14px;">
+                <span style="flex: none; width: 22px; height: 22px; border: 1.5px solid #0B1F3A; border-radius: 3px; margin-top: 2px;"></span>
+                <span>I agree to be contacted about this enquiry, as described in the privacy policy.</span>
+              </div>
+              <span style="display: inline-block; margin-top: 24px; background: #C9A24B; color: #0B1F3A; font-weight: 700; padding: 16px 36px; border-radius: 4px;">Send enquiry</span>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{showQuote}}" hint-placeholder-val="{{false}}">
+            <div>
+              <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px;">
+                <sc-for list="{{quoteFields}}" as="f" hint-placeholder-count="6">
+                  <div>
+                    <p style="margin: 0 0 6px; font-weight: 600; font-size: 14px;">{{f}}</p>
+                    <div style="border: 1.5px solid #8892A3; border-radius: 4px; padding: 13px 14px; min-height: 24px;"></div>
+                  </div>
+                </sc-for>
+              </div>
+              <p style="margin: 18px 0 6px; font-weight: 600; font-size: 14px;">Describe the work</p>
+              <div style="border: 1.5px solid #8892A3; border-radius: 4px; height: 100px;"></div>
+              <div style="margin-top: 18px; border: 2px dashed #AEB7C6; border-radius: 6px; padding: 22px; text-align: center;">
+                <p style="margin: 0; font-weight: 700;">Attach drawings or specifications</p>
+                <p style="margin: 4px 0 0; font-size: 14px; color: #4B5668;">PDF, image or Word · [maximum size]</p>
+              </div>
+              <span style="display: inline-block; margin-top: 24px; background: #C9A24B; color: #0B1F3A; font-weight: 700; padding: 16px 36px; border-radius: 4px;">Request quote</span>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{showBooking}}" hint-placeholder-val="{{false}}">
+            <div style="display: flex; flex-wrap: wrap; gap: 32px;">
+              <div style="flex: 1.2 1 320px; min-width: 0;">
+                <p style="margin: 0 0 14px; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 18px;">[Month and year]</p>
+                <div style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px;">
+                  <sc-for list="{{weekdays}}" as="w" hint-placeholder-count="7">
+                    <span style="text-align: center; font-size: 12px; font-weight: 700; color: #4B5668;">{{w}}</span>
+                  </sc-for>
+                  <sc-for list="{{days}}" as="d" hint-placeholder-count="35">
+                    <button sc-camel-on-click="{{d.pick}}" aria-label="{{d.aria}}" aria-pressed="{{d.on}}" style="height: 44px; border: 1px solid {{d.border}}; border-radius: 4px; background: {{d.bg}}; color: {{d.fg}}; font-family: 'Inter', sans-serif; font-weight: 600; font-size: 14px; cursor: pointer;">{{d.label}}</button>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="flex: 1 1 240px; min-width: 0;">
+                <p style="margin: 0 0 14px; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 18px;">Available times</p>
+                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                  <sc-for list="{{slots}}" as="s" hint-placeholder-count="6">
+                    <button sc-camel-on-click="{{s.pick}}" aria-pressed="{{s.on}}" style="min-height: 44px; padding: 0 16px; border: 1px solid {{s.border}}; border-radius: 4px; background: {{s.bg}}; color: {{s.fg}}; font-family: 'Inter', sans-serif; font-weight: 600; font-size: 14px; cursor: pointer;">{{s.label}}</button>
+                  </sc-for>
+                </div>
+                <p style="margin: 22px 0 8px; font-weight: 600; font-size: 14px;">Meeting type</p>
+                <div style="display: flex; gap: 8px;">
+                  <span style="background: #0B1F3A; color: #FFFFFF; border-radius: 999px; padding: 9px 18px; font-weight: 600; font-size: 14px;">Video call</span>
+                  <span style="border: 1px solid #C5CCD8; border-radius: 999px; padding: 9px 18px; font-weight: 600; font-size: 14px;">In person</span>
+                </div>
+                <span style="display: block; margin-top: 26px; background: #C9A24B; color: #0B1F3A; font-weight: 700; padding: 16px 28px; border-radius: 4px; text-align: center;">Confirm booking</span>
+                <p style="margin: 12px 0 0; font-size: 13px; color: #4B5668;">You receive a confirmation by email and the meeting is added to the team's calendar.</p>
+              </div>
+            </div>
+          </sc-if>
+
+        </div>
+      </div>
+
+      <div style="flex: 1 1 400px; min-width: 0;">
+        <div style="position: relative; height: 300px; background: #DDE3EC; border: 1px solid #C5CCD8; border-radius: 6px; overflow: hidden;">
+          <div style="position: absolute; left: 0; right: 0; top: 33%; height: 2px; background: #C5CCD8;"></div>
+          <div style="position: absolute; left: 0; right: 0; top: 66%; height: 2px; background: #C5CCD8;"></div>
+          <div style="position: absolute; top: 0; bottom: 0; left: 40%; width: 2px; background: #C5CCD8;"></div>
+          <div style="position: absolute; top: 0; bottom: 0; left: 72%; width: 2px; background: #C5CCD8;"></div>
+          <div style="position: absolute; left: {{pinX}}; top: {{pinY}}; transform: translate(-50%, -100%);">
+            <svg width="40" height="52" sc-camel-view-box="0 0 24 32" aria-hidden="true"><path d="M12 1C6 1 2 5.4 2 11c0 7.5 10 20 10 20s10-12.500 10-20C22 5.400 18 1 12 1z" fill="#0B1F3A"></path><circle cx="12" cy="11" r="4" fill="#C9A24B"></circle></svg>
+          </div>
+          <span style="position: absolute; left: 16px; bottom: 12px; font-size: 13px; color: #3B4658;">Google Maps placeholder</span>
+        </div>
+        <div style="margin-top: 16px; display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{offices}}" as="o" hint-placeholder-count="3">
+            <button sc-camel-on-click="{{o.pick}}" aria-pressed="{{o.on}}" style="text-align: left; background: #FFFFFF; border: 2px solid {{o.ring}}; border-radius: 6px; padding: 18px 20px; cursor: pointer; font-family: 'Inter', sans-serif; color: #0B1F3A;">
+              <span style="display: block; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 18px;">{{o.name}}</span>
+              <span style="display: block; margin-top: 4px; font-size: 14px; color: #4B5668;">[Address] · [Phone] · [Email]</span>
+              <span style="display: block; margin-top: 2px; font-size: 14px; color: #4B5668;">[Opening hours] · Directions</span>
+            </button>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <dc-import name="Footer" hint-size="100%,470px"></dc-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:2400}}">
+class Component extends DCLogic {
+  state = { tab: 'enquiry', office: 0, day: 12, slot: 1 };
+  renderVals() {
+    const { tab, office, day, slot } = this.state;
+    const defs = [
+      { key: 'enquiry', label: 'Send an enquiry' },
+      { key: 'quote', label: 'Request a quote' },
+      { key: 'booking', label: 'Book a consultation' },
+    ];
+    const cells = [];
+    for (let k = 0; k < 35; k += 1) {
+      const n = k - 1;
+      if (n < 1 || n > 30) { cells.push({ label: '', aria: 'No date', on: 'false', bg: 'transparent', fg: '#0B1F3A', border: 'transparent', pick: () => {} }); continue; }
+      const on = n === day;
+      cells.push({ label: String(n), aria: 'Day ' + n, on: on ? 'true' : 'false', bg: on ? '#0B1F3A' : '#FFFFFF', fg: on ? '#FFFFFF' : '#0B1F3A', border: on ? '#0B1F3A' : '#C5CCD8', pick: () => this.setState({ day: n }) });
+    }
+    const times = ['09:00', '10:30', '12:00', '14:00', '15:30', '17:00'];
+    const pins = [{ x: '36%', y: '52%' }, { x: '64%', y: '36%' }, { x: '78%', y: '74%' }];
+    const names = ['Head office', 'Regional office 1', 'Regional office 2'];
+    return {
+      tabs: defs.map((d) => ({ label: d.label, selected: tab === d.key, line: tab === d.key ? '#C9A24B' : 'transparent', pick: () => this.setState({ tab: d.key }) })),
+      showEnquiry: tab === 'enquiry',
+      showQuote: tab === 'quote',
+      showBooking: tab === 'booking',
+      enquiryFields: ['Full name', 'Email address', 'Phone', 'Organisation', 'Which company is this for?', 'Subject'],
+      quoteFields: ['Full name', 'Email address', 'Organisation', 'Service line', 'Project location', 'Target start date'],
+      weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+      days: cells,
+      slots: times.map((label, k) => {
+        const on = k === slot;
+        return { label, on: on ? 'true' : 'false', bg: on ? '#0B1F3A' : '#FFFFFF', fg: on ? '#FFFFFF' : '#0B1F3A', border: on ? '#0B1F3A' : '#C5CCD8', pick: () => this.setState({ slot: k }) };
+      }),
+      offices: names.map((name, k) => ({ name, on: office === k ? 'true' : 'false', ring: office === k ? '#C9A24B' : '#E3E7EE', pick: () => this.setState({ office: k }) })),
+      pinX: pins[office].x,
+      pinY: pins[office].y,
+    };
+  }
+}
+</script>
+
+
+</body></html>

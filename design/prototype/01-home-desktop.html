@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>OysterCore Group home page</title>
+<script src="086b9fd6-1a66-4bd3-89f1-59ee7ef339fc"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("f1236c6b-9641-4649-a6bd-dcbef6ceac25") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("f8582af9-af15-4999-97e5-df97494064f6") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("823a4a0a-c5f8-4ad6-a24e-3f1d3bf9dbeb") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("82cf7d61-a38d-4d12-bf07-a7ef8d9d636f") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("5bd6a9cf-b68a-45ac-866e-139aa7d84cb1") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("4f58f439-044f-4210-a3d8-38078205c235") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("adf885a6-b6c3-4d50-9ce6-c89137d0c3be") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("f1236c6b-9641-4649-a6bd-dcbef6ceac25") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("f8582af9-af15-4999-97e5-df97494064f6") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("823a4a0a-c5f8-4ad6-a24e-3f1d3bf9dbeb") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("82cf7d61-a38d-4d12-bf07-a7ef8d9d636f") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("5bd6a9cf-b68a-45ac-866e-139aa7d84cb1") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("4f58f439-044f-4210-a3d8-38078205c235") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("adf885a6-b6c3-4d50-9ce6-c89137d0c3be") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("f1236c6b-9641-4649-a6bd-dcbef6ceac25") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("f8582af9-af15-4999-97e5-df97494064f6") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("823a4a0a-c5f8-4ad6-a24e-3f1d3bf9dbeb") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("82cf7d61-a38d-4d12-bf07-a7ef8d9d636f") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("5bd6a9cf-b68a-45ac-866e-139aa7d84cb1") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("4f58f439-044f-4210-a3d8-38078205c235") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("adf885a6-b6c3-4d50-9ce6-c89137d0c3be") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("7ad34a3c-d465-4a3c-9522-c8c94c48ac66") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("7567ed25-ab17-482c-94e3-dcc4739348a3") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("2b229578-7d1a-4164-8b76-648217080190") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("82fae664-fa3f-428a-893a-39eb45a9abbe") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("168be36f-fe8c-4aea-9720-1e39a4da3966") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("808484aa-b1f0-406b-ba3a-4f9495cc6e84") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("7ad34a3c-d465-4a3c-9522-c8c94c48ac66") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("7567ed25-ab17-482c-94e3-dcc4739348a3") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("2b229578-7d1a-4164-8b76-648217080190") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("82fae664-fa3f-428a-893a-39eb45a9abbe") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("168be36f-fe8c-4aea-9720-1e39a4da3966") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("808484aa-b1f0-406b-ba3a-4f9495cc6e84") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("7ad34a3c-d465-4a3c-9522-c8c94c48ac66") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("7567ed25-ab17-482c-94e3-dcc4739348a3") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("2b229578-7d1a-4164-8b76-648217080190") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("82fae664-fa3f-428a-893a-39eb45a9abbe") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("168be36f-fe8c-4aea-9720-1e39a4da3966") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("808484aa-b1f0-406b-ba3a-4f9495cc6e84") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+</style>
+<style>
+body{margin:0}
+a,button{cursor:pointer}
+a:hover{opacity:.88}
+:focus-visible{outline:2px solid #FFFFFF;outline-offset:0;box-shadow:0 0 0 5px #0B1F3A}
+@media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important}}
+a{color:inherit;text-decoration:none}
+</style>
+</helmet>
+<div style="font-family: 'Inter', system-ui, sans-serif; background: #0B1F3A; color: #0B1F3A; line-height: 1.6;">
+  <dc-import name="Header" hint-size="100%,120px"></dc-import>
+
+  <!-- Hero slider: slide 1 is the group, slides 2 to 11 are the ten companies -->
+  <section aria-roledescription="carousel" aria-label="The group and its ten companies" style="background: #0B1F3A; color: #FFFFFF;">
+    <div style="position: relative; height: 640px; overflow: hidden;">
+      <sc-for list="{{slides}}" as="s" hint-placeholder-count="11">
+        <div aria-roledescription="slide" aria-hidden="{{s.hidden}}" style="position: absolute; left: 0; top: 0; right: 0; bottom: 0; background: {{s.bg}}; opacity: {{s.opacity}}; visibility: {{s.visibility}}; transition: opacity 1s ease-in-out, visibility 1s;">
+          <img src="{{s.image}}" alt="" style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover;">
+          <div style="position: absolute; left: 0; top: 0; right: 0; bottom: 0;">
+            <sc-if value="{{s.isVideo}}" hint-placeholder-val="{{true}}">
+              <div>
+                <button aria-label="Play the group video" style="position: absolute; z-index: 2; left: 40px; bottom: 28px; width: 64px; height: 64px; border-radius: 50%; border: 0; background: #C9A24B; display: inline-flex; align-items: center; justify-content: center; cursor: pointer;">
+                  <svg width="32" height="32" sc-camel-view-box="0 0 24 24" aria-hidden="true"><path d="M8 5l12 7-12 7z" fill="#0B1F3A"></path></svg>
+                </button>
+                <span style="position: absolute; left: 120px; bottom: 50px; font-size: 14px; font-weight: 600; color: #FFFFFF;">Watch the group film</span>
+              </div>
+            </sc-if>
+          </div>
+          <div style="position: absolute; left: 0; top: 0; right: 0; bottom: 0; background: rgba(8,23,41,0.52); pointer-events: none;"></div>
+          <div style="position: relative; max-width: 1360px; margin: 0 auto; height: 100%; box-sizing: border-box; padding: 56px 40px; display: flex; align-items: center;">
+            <div style="max-width: 600px; min-width: 0;">
+              <p style="margin: 0 0 20px; color: {{s.eyebrowColor}}; font-weight: 700; font-size: 13px; letter-spacing: 0.18em; text-transform: uppercase;">{{s.eyebrow}}</p>
+              <h2 style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 56px; line-height: 1.08; letter-spacing: -0.02em;">{{s.title}}</h2>
+              <p style="margin: 22px 0 0; max-width: 560px; font-size: 19px; line-height: 1.6; color: {{s.subColor}};">{{s.sub}}</p>
+              <div style="margin-top: 36px; display: flex; flex-wrap: wrap; gap: 14px;">
+                <a href="{{s.href1}}" style="background: {{s.btnBg}}; color: {{s.btnFg}}; font-weight: 700; padding: 16px 28px; border-radius: 4px;">{{s.label1}}</a>
+                <a href="{{s.href2}}" style="border: 1.5px solid #FFFFFF; color: #FFFFFF; font-weight: 700; padding: 14.5px 28px; border-radius: 4px;">{{s.label2}}</a>
+                <a href="{{s.href3}}" style="color: #FFFFFF; font-weight: 700; padding: 16px 8px; border-bottom: 2px solid {{s.underline}};">{{s.label3}}</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+      <div style="position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 3; pointer-events: none;">
+        <div style="max-width: 1360px; margin: 0 auto; height: 100%; box-sizing: border-box; padding: 0 40px; display: flex; align-items: center; justify-content: flex-end;">
+          <div style="pointer-events: none; position: relative; width: 660px; height: 360px; flex: none;">
+            <sc-for list="{{cards}}" as="k" hint-placeholder-count="11">
+              <button sc-camel-on-click="{{k.pick}}" aria-label="{{k.aria}}" aria-current="{{k.current}}" style="position: absolute; left: {{k.left}}; top: {{k.top}}; width: {{k.w}}; height: {{k.h}}; z-index: {{k.z}}; opacity: {{k.opacity}}; pointer-events: {{k.pe}}; padding: 0; box-sizing: border-box; overflow: hidden; border: 1.5px solid {{k.ring}}; border-radius: 18px; background: rgba(255,255,255,0.16); backdrop-filter: blur(16px) saturate(150%); -webkit-backdrop-filter: blur(16px) saturate(150%); box-shadow: 0 16px 40px rgba(0,0,0,0.32), inset 0 1px 0 rgba(255,255,255,0.45); color: #FFFFFF; font-family: 'Manrope', sans-serif; cursor: pointer; transition: left 1s cubic-bezier(0.4,0,0.2,1), top 1s cubic-bezier(0.4,0,0.2,1), width 1s cubic-bezier(0.4,0,0.2,1), height 1s cubic-bezier(0.4,0,0.2,1), opacity 1s cubic-bezier(0.4,0,0.2,1);">
+                <img src="{{k.image}}" alt="" style="position: absolute; left: 8px; top: 8px; width: calc(100% - 16px); height: calc(100% - 64px); object-fit: cover; border-radius: 12px;">
+                <span style="position: absolute; left: 0; right: 0; bottom: 0; height: 56px; display: flex; align-items: center; justify-content: center; padding: 0 8px; font-weight: 700; font-size: 13px; line-height: 1.2; text-shadow: 0 1px 3px rgba(0,0,0,0.45);">{{k.name}}</span>
+              </button>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="background: #081729; border-top: 1px solid #1E3558;">
+      <div style="max-width: 1360px; margin: 0 auto; padding: 14px 40px; display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: center; justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <button sc-camel-on-click="{{prev}}" aria-label="Previous slide" style="width: 44px; height: 44px; border: 1px solid #2A4A7A; background: transparent; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer;">
+            <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg>
+          </button>
+          <button sc-camel-on-click="{{next}}" aria-label="Next slide" style="width: 44px; height: 44px; border: 1px solid #2A4A7A; background: transparent; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer;">
+            <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 5l7 7-7 7"></path></svg>
+          </button>
+          <button sc-camel-on-click="{{toggle}}" aria-label="{{toggleLabel}}" style="width: 44px; height: 44px; border: 1px solid #2A4A7A; background: transparent; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer;">
+            <sc-if value="{{playing}}" hint-placeholder-val="{{true}}">
+              <svg width="16" height="16" sc-camel-view-box="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" fill="#FFFFFF"></rect><rect x="14" y="5" width="4" height="14" fill="#FFFFFF"></rect></svg>
+            </sc-if>
+            <sc-if value="{{paused}}" hint-placeholder-val="{{false}}">
+              <svg width="16" height="16" sc-camel-view-box="0 0 24 24" aria-hidden="true"><path d="M7 5l12 7-12 7z" fill="#FFFFFF"></path></svg>
+            </sc-if>
+          </button>
+          <span style="margin-left: 8px; font-weight: 600; font-size: 14px; color: #C9D2E0;">{{counter}}</span>
+        </div>
+        <nav aria-label="Choose a company" style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
+          <sc-for list="{{chips}}" as="c" hint-placeholder-count="11">
+            <button sc-camel-on-click="{{c.pick}}" aria-label="{{c.aria}}" aria-current="{{c.current}}" style="min-width: 44px; height: 44px; padding: 0 8px; box-sizing: border-box; border: 2px solid {{c.ring}}; border-radius: 4px; background: {{c.color}}; color: #FFFFFF; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 12px; cursor: pointer;">{{c.code}}</button>
+          </sc-for>
+        </nav>
+      </div>
+    </div>
+  </section>
+
+  <!-- Figures -->
+  <section style="background: #FFFFFF; border-bottom: 1px solid #E3E7EE;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 48px 40px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 32px;">
+      <sc-for list="{{figures}}" as="f" hint-placeholder-count="4">
+        <div>
+          <p style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 48px; line-height: 1; color: #0B1F3A;">{{f.value}}</p>
+          <p style="margin: 10px 0 0; font-size: 15px; color: #4B5668;">{{f.label}}</p>
+        </div>
+      </sc-for>
+    </div>
+  </section>
+
+  <!-- Our group -->
+  <section style="background: #FFFFFF;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 96px 40px;">
+      <div style="display: flex; flex-wrap: wrap; gap: 24px 48px; justify-content: space-between; align-items: flex-end;">
+        <div style="max-width: 640px;">
+          <p style="margin: 0 0 14px; color: #8A6A1C; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">Our group</p>
+          <h2 style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 40px; line-height: 1.15; letter-spacing: -0.01em;">Ten companies, each with its own expertise and its own identity.</h2>
+        </div>
+        <a href="Group.dc.html" style="font-weight: 700; padding: 12px 0; border-bottom: 2px solid #C9A24B;">See the full group structure</a>
+      </div>
+      <div style="margin-top: 48px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 20px;">
+        <sc-for list="{{companies}}" as="c" hint-placeholder-count="10">
+          <a href="Company.dc.html" style="display: block; background: #FFFFFF; border: 1px solid #E3E7EE; border-radius: 6px; overflow: hidden;">
+            <div style="height: 6px; background: {{c.color}};"></div>
+            <div style="padding: 22px 20px 24px;">
+              <div style="width: 44px; height: 44px; border-radius: 4px; background: {{c.color}}; color: #FFFFFF; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 15px; display: flex; align-items: center; justify-content: center;">{{c.code}}</div>
+              <p style="margin: 18px 0 6px; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 17px;">{{c.name}}</p>
+              <p style="margin: 0; font-size: 14px; color: #4B5668;">[One line on what this company does.]</p>
+            </div>
+          </a>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <!-- Services -->
+  <section style="background: #F2F4F8;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 96px 40px;">
+      <div style="display: flex; flex-wrap: wrap; gap: 24px 48px; justify-content: space-between; align-items: flex-end;">
+        <div style="max-width: 640px;">
+          <p style="margin: 0 0 14px; color: #8A6A1C; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">Services</p>
+          <h2 style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 40px; line-height: 1.15; letter-spacing: -0.01em;">Sixteen service lines under one point of accountability.</h2>
+        </div>
+        <a href="#" style="font-weight: 700; padding: 12px 0; border-bottom: 2px solid #C9A24B;">View all 16 services</a>
+      </div>
+      <div style="margin-top: 48px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px;">
+        <sc-for list="{{services}}" as="s" hint-placeholder-count="8">
+          <a href="#" style="display: block; background: #FFFFFF; border-radius: 6px; padding: 28px 24px 30px; border: 1px solid #E3E7EE;">
+            <p style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 14px; letter-spacing: 0.1em; color: #8A6A1C;">{{s.no}}</p>
+            <p style="margin: 14px 0 8px; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 19px;">{{s.name}}</p>
+            <p style="margin: 0; font-size: 14px; color: #4B5668;">[Short description of the service in about fifteen words.]</p>
+          </a>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <!-- Industries -->
+  <section style="background: #FFFFFF;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 88px 40px;">
+      <p style="margin: 0 0 14px; color: #8A6A1C; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">Industries we serve</p>
+      <h2 style="margin: 0; max-width: 760px; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 40px; line-height: 1.15; letter-spacing: -0.01em;">Sixteen sectors, from the public sector to private industry.</h2>
+      <div style="margin-top: 36px; display: flex; flex-wrap: wrap; gap: 12px;">
+        <sc-for list="{{industries}}" as="i" hint-placeholder-count="16">
+          <a href="#" style="border: 1px solid #C5CCD8; border-radius: 999px; padding: 11px 20px; font-weight: 600; font-size: 15px; background: #FFFFFF;">{{i.name}}</a>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <!-- Projects -->
+  <section style="background: #F2F4F8;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 96px 40px;">
+      <div style="display: flex; flex-wrap: wrap; gap: 24px 48px; justify-content: space-between; align-items: flex-end;">
+        <div style="max-width: 640px;">
+          <p style="margin: 0 0 14px; color: #8A6A1C; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">Projects</p>
+          <h2 style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 40px; line-height: 1.15; letter-spacing: -0.01em;">Work that speaks for the group.</h2>
+        </div>
+        <a href="#" style="font-weight: 700; padding: 12px 0; border-bottom: 2px solid #C9A24B;">Browse the project portfolio</a>
+      </div>
+      <div style="margin-top: 48px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px;">
+        <sc-for list="{{projects}}" as="p" hint-placeholder-count="3">
+          <a href="#" style="display: block; background: #FFFFFF; border-radius: 6px; overflow: hidden; border: 1px solid #E3E7EE;">
+            <div style="height: 230px; background: #D9DFE9; display: flex; align-items: center; justify-content: center; color: #4B5668; font-size: 14px;">[Project photograph]</div>
+            <div style="padding: 24px;">
+              <span style="display: inline-block; background: {{p.color}}; color: #FFFFFF; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 3px;">{{p.company}}</span>
+              <p style="margin: 14px 0 6px; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 20px; line-height: 1.3;">[Project title]</p>
+              <p style="margin: 0; font-size: 14px; color: #4B5668;">[Client] · [Location] · [Year]</p>
+            </div>
+          </a>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <!-- Trust -->
+  <section style="background: #FFFFFF;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 80px 40px;">
+      <p style="margin: 0 0 14px; color: #8A6A1C; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">Trust and credentials</p>
+      <h2 style="margin: 0; max-width: 760px; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 32px; line-height: 1.2; letter-spacing: -0.01em;">Certified, accredited and trusted by institutions.</h2>
+      <div style="margin-top: 32px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px;">
+        <sc-for list="{{badges}}" as="b" hint-placeholder-count="6">
+          <div style="border: 1.5px dashed #AEB7C6; border-radius: 6px; height: 96px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 8px; font-size: 13px; color: #4B5668;">{{b.label}}</div>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <!-- Portals -->
+  <section style="background: #0B1F3A; color: #FFFFFF;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 96px 40px;">
+      <p style="margin: 0 0 14px; color: #C9A24B; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">Work with OysterCore</p>
+      <h2 style="margin: 0; max-width: 760px; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 40px; line-height: 1.15; letter-spacing: -0.01em;">Three ways to engage with the group.</h2>
+      <div style="margin-top: 48px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px;">
+        <a href="Procurement.dc.html" style="display: block; background: #14305C; border: 1px solid #2A4A7A; border-radius: 6px; padding: 36px 32px;">
+          <p style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 24px;">Vendors and suppliers</p>
+          <p style="margin: 12px 0 28px; color: #C9D2E0;">Register as a vendor, read open tender notices and submit tenders.</p>
+          <span style="color: #C9A24B; font-weight: 700;">Open the procurement portal</span>
+        </a>
+        <a href="Careers.dc.html" style="display: block; background: #14305C; border: 1px solid #2A4A7A; border-radius: 6px; padding: 36px 32px;">
+          <p style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 24px;">Careers</p>
+          <p style="margin: 12px 0 28px; color: #C9D2E0;">See current vacancies, the graduate programme and internships.</p>
+          <span style="color: #C9A24B; font-weight: 700;">Explore careers</span>
+        </a>
+        <a href="Investors.dc.html" style="display: block; background: #14305C; border: 1px solid #2A4A7A; border-radius: 6px; padding: 36px 32px;">
+          <p style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 24px;">Investors</p>
+          <p style="margin: 12px 0 28px; color: #C9D2E0;">Governance, reports and presentations for investors.</p>
+          <span style="color: #C9A24B; font-weight: 700;">Go to investor relations</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- News -->
+  <section style="background: #FFFFFF;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 96px 40px;">
+      <div style="display: flex; flex-wrap: wrap; gap: 24px 48px; justify-content: space-between; align-items: flex-end;">
+        <div style="max-width: 640px;">
+          <p style="margin: 0 0 14px; color: #8A6A1C; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">News and insights</p>
+          <h2 style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 40px; line-height: 1.15; letter-spacing: -0.01em;">Latest from the group.</h2>
+        </div>
+        <a href="#" style="font-weight: 700; padding: 12px 0; border-bottom: 2px solid #C9A24B;">All news</a>
+      </div>
+      <div style="margin-top: 48px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px;">
+        <sc-for list="{{news}}" as="n" hint-placeholder-count="3">
+          <a href="#" style="display: block;">
+            <div style="height: 200px; background: #D9DFE9; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #4B5668; font-size: 14px;">[Article image]</div>
+            <p style="margin: 18px 0 8px; color: #8A6A1C; font-weight: 700; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;">{{n.category}} · [Date]</p>
+            <p style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 21px; line-height: 1.3;">[Article headline goes here]</p>
+          </a>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <dc-import name="Footer" hint-size="100%,470px"></dc-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:4900}}">
+class Component extends DCLogic {
+  state = { i: 0, playing: true };
+  componentDidMount() {
+    let reduce = false;
+    try { reduce = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); } catch (e) { reduce = false; }
+    if (reduce) { this.setState({ playing: false }); }
+    this.timer = setInterval(() => {
+      if (this.state.playing) { this.setState({ i: (this.state.i + 1) % 11 }); }
+    }, 6000);
+  }
+  componentWillUnmount() { if (this.timer) { clearInterval(this.timer); } }
+  renderVals() {
+    const colors = ['#1D4ED8', '#0F766E', '#B45309', '#7C3AED', '#BE123C', '#15803D', '#0369A1', '#A16207', '#C2410C', '#475569'];
+    const pad = (n) => String(n).padStart(2, '0');
+    const companies = colors.map((color, i) => ({ color, code: 'C' + pad(i + 1), name: 'Company ' + pad(i + 1) }));
+    const cur = this.state.i;
+    const total = 11;
+    const images = [
+      '/_blob/4fbe9e2aaade0fe8fba9a8e6830cae05', '/_blob/53d209db63e94e1bf79aacfa0ba8cb87', '/_blob/159b9100035e61603703887e2f2d0a40',
+      '/_blob/f83f2b5c27795c0b8d2eeb29c0f2e735', '/_blob/3249c802725412c7a55fe70311250e3c', '/_blob/174461e3898b2bde2f29582cc5751167',
+      '/_blob/feefa3efd31559e9a3f81d377cba1af2', '/_blob/3c8cd87b9eccaea1dd0da61df32841db', '/_blob/0492b5d7dd30c8dad0e4ae8d32ca1383',
+      '/_blob/aa7a7530d2be4b3adee3568d20cad2b2', '/_blob/595179856c5db260b90fdd72394f3ff5',
+    ];
+    const base = [{
+      bg: '#0B1F3A', eyebrow: 'Diversified group · Ten companies', eyebrowColor: '#C9A24B',
+      title: 'One group. Ten businesses. One standard of delivery.',
+      sub: '[Sub-headline: one or two sentences on what the group does and who it serves, supplied by OysterCore.]', subColor: '#C9D2E0',
+      label1: 'Explore our group', href1: 'Group.dc.html', btnBg: '#C9A24B', btnFg: '#0B1F3A',
+      label2: 'Request a quote', href2: 'Contact.dc.html',
+      label3: 'Work with us', href3: 'Procurement.dc.html', underline: '#C9A24B',
+      isVideo: true, isPhoto: false, imageLabel: '',
+    }].concat(companies.map((c) => ({
+      bg: c.color, eyebrow: c.name + ' · A company of OysterCore Group', eyebrowColor: '#FFFFFF',
+      title: '[' + c.name + ' headline: what this company delivers]',
+      sub: '[Two sentences from the company about its work and the clients it serves.]', subColor: '#F1F4F9',
+      label1: 'Explore ' + c.name, href1: 'Company.dc.html', btnBg: '#FFFFFF', btnFg: '#0B1F3A',
+      label2: 'Request a quote', href2: 'Contact.dc.html',
+      label3: 'All companies', href3: 'Group.dc.html', underline: '#FFFFFF',
+      isVideo: false, isPhoto: true, imageLabel: '[' + c.name + ' full-bleed hero photograph, 1920 × 800, under a dark overlay]',
+    })));
+    const slides = base.map((s, k) => ({
+      ...s,
+      image: images[k],
+      opacity: k === cur ? '1' : '0',
+      visibility: k === cur ? 'visible' : 'hidden',
+      hidden: k === cur ? 'false' : 'true',
+    }));
+    const chips = [{ code: 'G', name: 'the group', color: '#0B1F3A' }].concat(companies.map((c) => ({ code: c.code, name: c.name, color: c.color }))).map((c, k) => ({
+      code: c.code, color: c.color,
+      ring: k === cur ? '#C9A24B' : 'transparent',
+      aria: 'Show ' + c.name,
+      current: k === cur ? 'true' : 'false',
+      pick: () => this.setState({ i: k }),
+    }));
+    const labels = [{ code: 'G', name: 'The group', color: '#0B1F3A' }].concat(companies.map((c) => ({ code: c.code, name: c.name, color: c.color })));
+    const geo = { 0: [150, 300, 0, 1], 1: [120, 244, 145, 0.92], 2: [100, 200, 265, 0.75], 3: [84, 170, 367, 0] };
+    const PW = 660, PH = 360;
+    const cards = labels.map((lab, k) => {
+      const off = ((k - cur + 5 + total) % total) - 5;
+      const a = Math.min(Math.abs(off), 3);
+      const g = geo[a];
+      const cx = PW / 2 + (off < 0 ? -1 : 1) * g[2];
+      return {
+        left: (cx - g[0] / 2) + 'px', top: ((PH - g[1]) / 2) + 'px', w: g[0] + 'px', h: g[1] + 'px',
+        z: String(10 - a), opacity: String(g[3]), pe: a >= 3 ? 'none' : 'auto',
+        ring: off === 0 ? '#C9A24B' : 'rgba(255,255,255,0.42)',
+        image: images[k], name: lab.name,
+        aria: 'Show ' + lab.name,
+        current: off === 0 ? 'true' : 'false',
+        pick: () => this.setState({ i: k }),
+      };
+    });
+    return {
+      slides,
+      cards,
+      chips,
+      counter: pad(cur + 1) + ' / ' + total,
+      playing: this.state.playing,
+      paused: !this.state.playing,
+      toggleLabel: this.state.playing ? 'Pause the slideshow' : 'Play the slideshow',
+      toggle: () => this.setState({ playing: !this.state.playing }),
+      prev: () => this.setState({ i: (this.state.i + total - 1) % total }),
+      next: () => this.setState({ i: (this.state.i + 1) % total }),
+      figures: [
+        { value: '10', label: 'Companies in the group' },
+        { value: '16', label: 'Service lines' },
+        { value: '16', label: 'Industries served' },
+        { value: '00+', label: 'Projects delivered [figure to confirm]' },
+      ],
+      companies,
+      services: Array.from({ length: 8 }, (_, i) => ({ no: pad(i + 1), name: 'Service line ' + pad(i + 1) })),
+      industries: Array.from({ length: 16 }, (_, i) => ({ name: 'Industry ' + pad(i + 1) })),
+      projects: [0, 3, 6].map((i) => ({ color: colors[i], company: companies[i].name })),
+      badges: Array.from({ length: 6 }, (_, i) => ({ label: i < 3 ? '[Certification ' + (i + 1) + ']' : '[Client logo ' + (i - 2) + ']' })),
+      news: [{ category: 'News' }, { category: 'Press release' }, { category: 'CSR' }],
+    };
+  }
+}
+</script>
+
+
+</body></html>

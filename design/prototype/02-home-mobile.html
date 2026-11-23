@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>OysterCore Group home page on a phone</title>
+<script src="f2e3912f-3ee2-467d-8369-f5a254fbf055"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("710d47c4-de80-4900-96ee-2545e7ff4984") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("22f8e93c-7ce4-41ab-b73b-0893fd5f341f") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("aeaa5e76-dbd3-4081-a38e-a21435344c85") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("f4cbef0d-7e37-4e7b-b35a-ec0aa9717b38") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("1d3a85d4-7f17-4b62-b777-a184241523ab") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("9724bbdf-e153-4aac-9120-4a82dcd23945") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("5362606f-8302-4643-bca3-e8e0fe89b9f7") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("710d47c4-de80-4900-96ee-2545e7ff4984") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("22f8e93c-7ce4-41ab-b73b-0893fd5f341f") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("aeaa5e76-dbd3-4081-a38e-a21435344c85") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("f4cbef0d-7e37-4e7b-b35a-ec0aa9717b38") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("1d3a85d4-7f17-4b62-b777-a184241523ab") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("9724bbdf-e153-4aac-9120-4a82dcd23945") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("5362606f-8302-4643-bca3-e8e0fe89b9f7") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("710d47c4-de80-4900-96ee-2545e7ff4984") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("22f8e93c-7ce4-41ab-b73b-0893fd5f341f") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("aeaa5e76-dbd3-4081-a38e-a21435344c85") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("f4cbef0d-7e37-4e7b-b35a-ec0aa9717b38") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("1d3a85d4-7f17-4b62-b777-a184241523ab") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("9724bbdf-e153-4aac-9120-4a82dcd23945") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("5362606f-8302-4643-bca3-e8e0fe89b9f7") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("7686b1f0-4fd6-4841-8219-52d522b7541d") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("bc3b2544-4783-42ac-9bfe-9ba78d60313f") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("c6dc9a15-0757-4ed2-9342-f1e825f5ff2e") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("f9ad8607-f700-4157-b21d-574c32112f0a") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("2a074162-d9eb-4c7b-b841-7b390c932cb1") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("1e8eaed5-7704-45e7-b1c5-77fc1f580428") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("7686b1f0-4fd6-4841-8219-52d522b7541d") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("bc3b2544-4783-42ac-9bfe-9ba78d60313f") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("c6dc9a15-0757-4ed2-9342-f1e825f5ff2e") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("f9ad8607-f700-4157-b21d-574c32112f0a") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("2a074162-d9eb-4c7b-b841-7b390c932cb1") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("1e8eaed5-7704-45e7-b1c5-77fc1f580428") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("7686b1f0-4fd6-4841-8219-52d522b7541d") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("bc3b2544-4783-42ac-9bfe-9ba78d60313f") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("c6dc9a15-0757-4ed2-9342-f1e825f5ff2e") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("f9ad8607-f700-4157-b21d-574c32112f0a") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("2a074162-d9eb-4c7b-b841-7b390c932cb1") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("1e8eaed5-7704-45e7-b1c5-77fc1f580428") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+</style>
+<style>
+body{margin:0}
+a,button{cursor:pointer}
+a:hover{opacity:.88}
+:focus-visible{outline:2px solid #FFFFFF;outline-offset:0;box-shadow:0 0 0 5px #0B1F3A}
+@media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important}}
+a{color:inherit;text-decoration:none}
+</style>
+</helmet>
+<div style="width: 390px; height: 2960px; overflow: hidden; background: #0B1F3A; font-family: 'Inter', system-ui, sans-serif; color: #0B1F3A; line-height: 1.55;">
+
+  <div style="background: #FFFFFF; height: 64px; box-sizing: border-box; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #E3E7EE;">
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 8px;" aria-label="OysterCore Group home">
+      <svg width="30" height="30" sc-camel-view-box="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="17" fill="#0B1F3A"></circle><path d="M18 7.5a10.5 10.5 0 1 0 10.5 10.5" fill="none" stroke="#C9A24B" stroke-width="3" stroke-linecap="round"></path><circle cx="18" cy="18" r="3.6" fill="#C9A24B"></circle></svg>
+      <span style="font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 16px; letter-spacing: 0.14em;">OYSTERCORE</span>
+    </a>
+    <button aria-label="Open the menu" style="width: 44px; height: 44px; border: 1px solid #CBD2DD; background: #FFFFFF; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;">
+      <svg width="20" height="20" sc-camel-view-box="0 0 24 24" fill="none" stroke="#0B1F3A" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
+    </button>
+  </div>
+
+  <section aria-roledescription="carousel" aria-label="The group and its ten companies" style="background: #0B1F3A; color: #FFFFFF;">
+    <div style="position: relative; height: 620px; overflow: hidden;">
+      <sc-for list="{{slides}}" as="s" hint-placeholder-count="11">
+        <div aria-roledescription="slide" aria-hidden="{{s.hidden}}" style="position: absolute; left: 0; top: 0; right: 0; bottom: 0; background: {{s.bg}}; opacity: {{s.opacity}}; visibility: {{s.visibility}}; transition: opacity 1s ease-in-out, visibility 1s;">
+          <img src="{{s.image}}" alt="" style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover;">
+          <div style="position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; align-items: flex-start; justify-content: center; padding-top: 84px; box-sizing: border-box;">
+            <sc-if value="{{s.isVideo}}" hint-placeholder-val="{{true}}">
+              <button aria-label="Play the group video" style="position: relative; z-index: 2; width: 64px; height: 64px; border-radius: 50%; border: 0; background: #C9A24B; display: inline-flex; align-items: center; justify-content: center;">
+                <svg width="24" height="24" sc-camel-view-box="0 0 24 24" aria-hidden="true"><path d="M8 5l12 7-12 7z" fill="#0B1F3A"></path></svg>
+              </button>
+            </sc-if>
+          </div>
+          <div style="position: absolute; left: 0; top: 0; right: 0; bottom: 0; background: rgba(8,23,41,0.55); pointer-events: none;"></div>
+          <div style="position: relative; padding: 250px 20px 0;">
+            <p style="margin: 0 0 12px; color: {{s.eyebrowColor}}; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">{{s.eyebrow}}</p>
+            <h2 style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 30px; line-height: 1.1; letter-spacing: -0.02em;">{{s.title}}</h2>
+            <p style="margin: 14px 0 0; font-size: 16px; color: {{s.subColor}};">{{s.sub}}</p>
+            <div style="margin-top: 22px; display: flex; flex-direction: column; gap: 10px;">
+              <a href="{{s.href1}}" style="background: {{s.btnBg}}; color: {{s.btnFg}}; font-weight: 700; padding: 14px 20px; border-radius: 4px; text-align: center;">{{s.label1}}</a>
+              <a href="{{s.href2}}" style="border: 1.5px solid #FFFFFF; color: #FFFFFF; font-weight: 700; padding: 12.5px 20px; border-radius: 4px; text-align: center;">{{s.label2}}</a>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+    <div style="background: #081729; border-top: 1px solid #1E3558; padding: 12px 20px;">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <button sc-camel-on-click="{{prev}}" aria-label="Previous slide" style="width: 44px; height: 44px; border: 1px solid #2A4A7A; background: transparent; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;">
+          <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg>
+        </button>
+        <button sc-camel-on-click="{{next}}" aria-label="Next slide" style="width: 44px; height: 44px; border: 1px solid #2A4A7A; background: transparent; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;">
+          <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 5l7 7-7 7"></path></svg>
+        </button>
+        <button sc-camel-on-click="{{toggle}}" aria-label="{{toggleLabel}}" style="width: 44px; height: 44px; border: 1px solid #2A4A7A; background: transparent; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;">
+          <sc-if value="{{playing}}" hint-placeholder-val="{{true}}">
+            <svg width="16" height="16" sc-camel-view-box="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" fill="#FFFFFF"></rect><rect x="14" y="5" width="4" height="14" fill="#FFFFFF"></rect></svg>
+          </sc-if>
+          <sc-if value="{{paused}}" hint-placeholder-val="{{false}}">
+            <svg width="16" height="16" sc-camel-view-box="0 0 24 24" aria-hidden="true"><path d="M7 5l12 7-12 7z" fill="#FFFFFF"></path></svg>
+          </sc-if>
+        </button>
+        <span style="margin-left: auto; font-weight: 600; font-size: 16px; color: #C9D2E0;">{{counter}}</span>
+      </div>
+      <div style="margin-top: 10px; display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px;">
+        <sc-for list="{{chips}}" as="c" hint-placeholder-count="11">
+          <button sc-camel-on-click="{{c.pick}}" aria-label="{{c.aria}}" aria-current="{{c.current}}" style="flex: none; min-width: 44px; height: 44px; padding: 0 8px; box-sizing: border-box; border: 2px solid {{c.ring}}; border-radius: 4px; background: {{c.color}}; color: #FFFFFF; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 12px;">{{c.code}}</button>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <section style="background: #FFFFFF; padding: 32px 20px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px;">
+    <sc-for list="{{figures}}" as="f" hint-placeholder-count="4">
+      <div>
+        <p style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 36px; line-height: 1;">{{f.value}}</p>
+        <p style="margin: 8px 0 0; font-size: 16px; color: #4B5668;">{{f.label}}</p>
+      </div>
+    </sc-for>
+  </section>
+
+  <section style="background: #F2F4F8; padding: 48px 20px;">
+    <p style="margin: 0 0 10px; color: #8A6A1C; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">Our group</p>
+    <h2 style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 28px; line-height: 1.15;">Ten companies, one group.</h2>
+    <div style="margin-top: 24px; display: flex; flex-direction: column; gap: 10px;">
+      <sc-for list="{{companies}}" as="c" hint-placeholder-count="10">
+        <a href="Company.dc.html" style="display: flex; align-items: center; gap: 14px; background: #FFFFFF; border: 1px solid #E3E7EE; border-radius: 6px; padding: 12px 14px; min-height: 48px;">
+          <span style="width: 40px; height: 40px; border-radius: 4px; background: {{c.color}}; color: #FFFFFF; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 16px; display: inline-flex; align-items: center; justify-content: center; flex: none;">{{c.code}}</span>
+          <span style="font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 16px; flex: 1 1 auto;">{{c.name}}</span>
+          <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="#4B5668" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 5l7 7-7 7"></path></svg>
+        </a>
+      </sc-for>
+    </div>
+  </section>
+
+  <section style="background: #FFFFFF; padding: 48px 20px;">
+    <p style="margin: 0 0 10px; color: #8A6A1C; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">Services</p>
+    <h2 style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 28px; line-height: 1.15;">Sixteen service lines.</h2>
+    <div style="margin-top: 24px; display: flex; flex-direction: column; gap: 12px;">
+      <sc-for list="{{services}}" as="s" hint-placeholder-count="4">
+        <a href="#" style="display: block; border: 1px solid #E3E7EE; border-radius: 6px; padding: 18px;">
+          <p style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 13px; letter-spacing: 0.1em; color: #8A6A1C;">{{s.no}}</p>
+          <p style="margin: 6px 0 4px; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 18px;">{{s.name}}</p>
+          <p style="margin: 0; font-size: 16px; color: #4B5668;">[Short description of the service.]</p>
+        </a>
+      </sc-for>
+    </div>
+    <a href="#" style="display: block; margin-top: 20px; text-align: center; border: 1.5px solid #0B1F3A; border-radius: 4px; padding: 13.5px 20px; font-weight: 700;">View all 16 services</a>
+  </section>
+
+  <section style="background: #0B1F3A; color: #FFFFFF; padding: 48px 20px;">
+    <p style="margin: 0 0 10px; color: #C9A24B; font-weight: 700; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;">Work with OysterCore</p>
+    <h2 style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 28px; line-height: 1.15;">Three ways to engage.</h2>
+    <div style="margin-top: 24px; display: flex; flex-direction: column; gap: 14px;">
+      <a href="Procurement.dc.html" style="display: block; background: #14305C; border: 1px solid #2A4A7A; border-radius: 6px; padding: 24px 20px;">
+        <p style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 20px;">Vendors and suppliers</p>
+        <p style="margin: 8px 0 14px; font-size: 16px; color: #C9D2E0;">Register, read tenders and submit bids.</p>
+        <span style="color: #C9A24B; font-weight: 700;">Open the procurement portal</span>
+      </a>
+      <a href="Careers.dc.html" style="display: block; background: #14305C; border: 1px solid #2A4A7A; border-radius: 6px; padding: 24px 20px;">
+        <p style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 20px;">Careers</p>
+        <p style="margin: 8px 0 14px; font-size: 16px; color: #C9D2E0;">Vacancies, graduate programme and internships.</p>
+        <span style="color: #C9A24B; font-weight: 700;">Explore careers</span>
+      </a>
+      <a href="Investors.dc.html" style="display: block; background: #14305C; border: 1px solid #2A4A7A; border-radius: 6px; padding: 24px 20px;">
+        <p style="margin: 0; font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 20px;">Investors</p>
+        <p style="margin: 8px 0 14px; font-size: 16px; color: #C9D2E0;">Governance, reports and presentations.</p>
+        <span style="color: #C9A24B; font-weight: 700;">Go to investor relations</span>
+      </a>
+    </div>
+  </section>
+
+  <section style="background: #FFFFFF; padding: 40px 20px 44px;">
+    <p style="margin: 0 0 6px; font-weight: 700; font-size: 16px;">Emergency line</p>
+    <p style="margin: 0 0 20px; font-size: 16px; color: #4B5668;">[Emergency number]</p>
+    <a href="Contact.dc.html" style="display: block; background: #C9A24B; color: #0B1F3A; font-weight: 700; padding: 15px 20px; border-radius: 4px; text-align: center;">Contact us</a>
+  </section>
+
+  <footer style="background: #0B1F3A; color: #C9D2E0; padding: 32px 20px 40px; font-size: 13px;">
+    <p style="margin: 0; color: #FFFFFF; font-weight: 700; letter-spacing: 0.12em;">OYSTERCORE GROUP</p>
+    <p style="margin: 8px 0 0;">© [Year] OysterCore Group. [RC number].</p>
+    <p style="margin: 6px 0 0;">Privacy · Terms · Cookies · Website by Slatech Solutions</p>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{&quot;$preview&quot;:{&quot;width&quot;:390,&quot;height&quot;:2900}}">
+class Component extends DCLogic {
+  state = { i: 0, playing: true };
+  componentDidMount() {
+    let reduce = false;
+    try { reduce = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); } catch (e) { reduce = false; }
+    if (reduce) { this.setState({ playing: false }); }
+    this.timer = setInterval(() => {
+      if (this.state.playing) { this.setState({ i: (this.state.i + 1) % 11 }); }
+    }, 6000);
+  }
+  componentWillUnmount() { if (this.timer) { clearInterval(this.timer); } }
+  renderVals() {
+    const colors = ['#1D4ED8', '#0F766E', '#B45309', '#7C3AED', '#BE123C', '#15803D', '#0369A1', '#A16207', '#C2410C', '#475569'];
+    const pad = (n) => String(n).padStart(2, '0');
+    const names = colors.map((c, i) => 'Company ' + pad(i + 1));
+    const cur = this.state.i;
+    const total = 11;
+    const images = [
+      '/_blob/4fbe9e2aaade0fe8fba9a8e6830cae05', '/_blob/53d209db63e94e1bf79aacfa0ba8cb87', '/_blob/159b9100035e61603703887e2f2d0a40',
+      '/_blob/f83f2b5c27795c0b8d2eeb29c0f2e735', '/_blob/3249c802725412c7a55fe70311250e3c', '/_blob/174461e3898b2bde2f29582cc5751167',
+      '/_blob/feefa3efd31559e9a3f81d377cba1af2', '/_blob/3c8cd87b9eccaea1dd0da61df32841db', '/_blob/0492b5d7dd30c8dad0e4ae8d32ca1383',
+      '/_blob/aa7a7530d2be4b3adee3568d20cad2b2', '/_blob/595179856c5db260b90fdd72394f3ff5',
+    ];
+    const base = [{
+      bg: '#0B1F3A', eyebrow: 'Diversified group · Ten companies', eyebrowColor: '#C9A24B',
+      title: 'One group. Ten businesses. One standard of delivery.',
+      sub: '[Sub-headline supplied by OysterCore.]', subColor: '#C9D2E0',
+      label1: 'Explore our group', href1: 'Group.dc.html', btnBg: '#C9A24B', btnFg: '#0B1F3A',
+      label2: 'Request a quote', href2: 'Contact.dc.html',
+      isVideo: true, isPhoto: false, imageLabel: 'Group video placeholder',
+    }].concat(colors.map((c, i) => ({
+      bg: c, eyebrow: names[i] + ' · A company of OysterCore Group', eyebrowColor: '#FFFFFF',
+      title: '[' + names[i] + ' headline]',
+      sub: '[Two sentences from the company about its work.]', subColor: '#F1F4F9',
+      label1: 'Explore ' + names[i], href1: 'Company.dc.html', btnBg: '#FFFFFF', btnFg: '#0B1F3A',
+      label2: 'Request a quote', href2: 'Contact.dc.html',
+      isVideo: false, isPhoto: true, imageLabel: '[' + names[i] + ' hero photograph]',
+    })));
+    const slides = base.map((s, k) => ({
+      ...s,
+      image: images[k],
+      opacity: k === cur ? '1' : '0',
+      visibility: k === cur ? 'visible' : 'hidden',
+      hidden: k === cur ? 'false' : 'true',
+    }));
+    const chips = [{ code: 'G', name: 'the group', color: '#0B1F3A' }].concat(colors.map((c, i) => ({ code: 'C' + pad(i + 1), name: names[i], color: c }))).map((c, k) => ({
+      code: c.code, color: c.color,
+      ring: k === cur ? '#C9A24B' : 'transparent',
+      aria: 'Show ' + c.name,
+      current: k === cur ? 'true' : 'false',
+      pick: () => this.setState({ i: k }),
+    }));
+    return {
+      slides,
+      chips,
+      counter: pad(cur + 1) + ' / ' + total,
+      playing: this.state.playing,
+      paused: !this.state.playing,
+      toggleLabel: this.state.playing ? 'Pause the slideshow' : 'Play the slideshow',
+      toggle: () => this.setState({ playing: !this.state.playing }),
+      prev: () => this.setState({ i: (this.state.i + total - 1) % total }),
+      next: () => this.setState({ i: (this.state.i + 1) % total }),
+      figures: [
+        { value: '10', label: 'Companies' },
+        { value: '16', label: 'Service lines' },
+        { value: '16', label: 'Industries served' },
+        { value: '00+', label: 'Projects [to confirm]' },
+      ],
+      companies: colors.map((color, i) => ({ color, code: 'C' + pad(i + 1), name: 'Company ' + pad(i + 1) })),
+      services: Array.from({ length: 4 }, (_, i) => ({ no: pad(i + 1), name: 'Service line ' + pad(i + 1) })),
+    };
+  }
+}
+</script>
+
+
+</body></html>
