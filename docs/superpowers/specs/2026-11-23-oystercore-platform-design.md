@@ -1,9 +1,9 @@
 # OysterCore Group platform: design
 
-**Date:** 23 November 2026 (revision 3: no monthly cost to the client; review answers Q1 to Q3 added)
+**Date:** 23 November 2026 (revision 4: Hostinger VPS; no monthly cost to the client; review answers Q1 to Q3 added)
 **Client:** OysterCore Group (Package Three, Ecosystem)
 **Built by:** Slatech Solution Limited
-**Status:** approved by Slatech on 23 November 2026. The client has signed the PRD (told by Slatech on 23 November), so the PRD is now the baseline and wording changes go through PRD §16.
+**Status:** revision 4 approved by Slatech on 23 November 2026 (revisions 1 to 3 were approved earlier that day; revision 4 moves the hosting from managed Node.js hosting to a Hostinger VPS). The client has signed the PRD (told by Slatech on 23 November), so the PRD is now the baseline and wording changes go through PRD §16.
 
 Requirement IDs (CMS-01, PRC-05, and so on) refer to the client PRD, `OYSTERCORE_PRD.pdf`, reference OCG/WEB/2026-021-PRD v1.0, 9 November 2026. Copies are in `Desktop\Claude\` and `Documents\Oystercore\`. The PRD is the scope. This document says how that scope gets built. Where the two disagree, the PRD wins, unless this document says it is changing the PRD and why.
 
@@ -30,12 +30,12 @@ The prototype gives the look. Everything in it is placeholder: copy is in [brack
 ## 2. Goals, non-goals, anti-goals
 
 **Goals**
-- Every requirement in PRD §7 and §8 is met and shown working against its acceptance criterion. The launch checklist is PRD §14. Where this design can't meet a PRD sentence at zero running cost, it says so and proposes new wording (§14, O1 and O8).
+- Every requirement in PRD §7 and §8 is met and shown working against its acceptance criterion. The launch checklist is PRD §14. Where this design can't meet a PRD sentence at zero running cost, it says so and proposes new wording (§14, O1 and O9).
 - The site matches the approved prototype: layout, palette, type, components and interactions.
 - Editors manage all content through the editing system, using the roles in PRD §3.2. A company editor can reach only their own company.
-- Confidential uploads (tender bids, vendor documents, CVs, investor-only files) are encrypted at rest. They are never reachable without authorisation, and they are checked and made safe before anyone can open them (§10.4).
-- The site is fast on mobile against the Core Web Vitals targets in PRD §8. It must stay fast even though managed hosting stops apps that sit idle.
-- **No monthly cost to OysterCore (decided by Slatech).** Everything runs on the Hostinger plan included in the package, on free tiers of outside services, or on subscriptions OysterCore already holds (§6).
+- Confidential uploads (tender bids, vendor documents, CVs, investor-only files) are encrypted at rest. They are never reachable without authorisation, and they are scanned for malware and checked before anyone can open them (§10.4).
+- The site is fast on mobile against the Core Web Vitals targets in PRD §8.
+- **No monthly cost to OysterCore (decided by Slatech).** The Hostinger VPS is paid by Slatech, on a 24-month term that covers the two years of hosting the package includes. Everything else runs on free tiers of outside services, or on subscriptions OysterCore already holds (§6).
 
 **Non-goals** (from PRD §4.2, plus a few this design adds)
 - Evaluating or scoring bids online. The portal receives bids; OysterCore evaluates them offline.
@@ -50,23 +50,20 @@ The prototype gives the look. Everything in it is placeholder: copy is in [brack
 - A bid, CV or vendor document sent out as an email attachment, or pushed into Zoho, where this design can no longer control who opens it or when.
 - A company editor able to change another company's content.
 - Editors needing a developer for routine updates: news, tenders, vacancies, projects, documents or page text.
-- The first visitor after a quiet spell waiting several seconds for a cold app.
+- A server that has missed security updates, or a service reachable from the internet that should only be reachable through Cloudflare.
 - Copy, colours or company data written into templates instead of coming from the editing system.
 - A monthly bill for OysterCore that nobody agreed to.
 
 ## 3. Constraints
 
-- **Code (decided by Slatech):** Node.js and TypeScript throughout, on Node 22 LTS. Both Hostinger and Strapi 5 support it.
-- **Hosting (decided by Slatech):** Hostinger managed Node.js web-app hosting on a Business or Cloud plan, not a VPS. Hostinger's limits page sets these rules:
-  - No always-running background workers. Apps run on demand and stop when idle, and scheduled work runs from hPanel cron.
-  - No inbound WebSockets, no Redis, no Docker, no custom ports, and no root access.
-  - **Every request is cut off after 120 seconds.**
-  - Every deploy overwrites `public_html` and `hbuilds/`, so files the app writes there do not survive a deploy.
-  - A shared process limit (NPROC) covers every app on the plan: 120 on Business, 200 on Cloud Startup, 400 on Cloud Professional. Hostinger says one Next.js app uses about 10–11 threads.
-  - Deploys come from GitHub, with auto-deploy on push. One GitHub account can be linked per plan. Node 18, 20, 22 and 24 are available.
-- **Database:** the MySQL/MariaDB included with the plan. Strapi 5 needs MySQL 8.0+ or MariaDB 10.3+, through the `mysql2` driver.
-- **Cost (decided by Slatech):** no monthly cost to the client. Outside services are used only on free tiers. Free tiers have limits, and §6 lists what happens if a limit is reached.
-- **The "dedicated server" promise.** The PRD (§4.1, §8 Availability, §10) promises one, and managed hosting isn't one. See O1.
+- **Code (decided by Slatech):** Node.js and TypeScript throughout, on Node 22 LTS (22.23.4 or newer, which Astro 7 needs). Strapi 5 supports it.
+- **Hosting (decided by Slatech, 23 November):** a Hostinger VPS "with storage". The client's brief only says "Hostinger", and the signed PRD promises a dedicated server with guaranteed, unshared resources (§4.1, §8, §10). A VPS with guaranteed vCPU and RAM is the closest Hostinger product to that. Slatech's reading of "with storage": uploads stay on the VPS's own NVMe disk, with an encrypted copy off the server every night.
+  - **Server:** Ubuntu 24.04 LTS, root access, one server for both environments. Hostinger's KVM 2 (2 vCPU, 8 GB RAM, 100 GB NVMe, weekly backups included) is the minimum that fits (§5). The specs and prices come from Hostinger's pages and are checked again at order.
+  - **We own the server.** Hardening, patching and monitoring are part of this design (§10.9) and of the handover (O11).
+  - **No managed-hosting limits.** Background jobs, long requests, WebSockets and files on disk are all allowed.
+- **Database:** MariaDB 11.4 LTS, installed on the VPS and reachable only from the server itself. It is the version Strapi 5 recommends. The `mysql2` driver.
+- **Cost (decided by Slatech):** no monthly cost to the client. The VPS is paid by Slatech on a 24-month term (O2). Outside services are used only on free tiers, and §6 lists what happens if a limit is reached.
+- **The "dedicated server" promise.** The PRD (§4.1, §8 Availability, §10) promises a dedicated server with guaranteed, unshared resources. A KVM VPS has its own guaranteed vCPU and RAM, but it is still a virtual server. See O1.
 - **Timeline:** go-live is 8 weeks after the deposit *and complete content*, followed by 5 months of care (PRD §11). The deposit was received by 9 November 2026.
 - **Compliance:**
   - WCAG 2.2 AA.
@@ -78,25 +75,24 @@ The prototype gives the look. Everything in it is placeholder: copy is in [brack
 
 | | Approach | What it buys | What it costs |
 |---|---|---|---|
-| A | **Payload CMS and Next.js in one app** | One TypeScript app, so one deploy and few threads. Drafts, versions, preview and field-level access control are built in. | No official MySQL support, so it needs an outside Postgres database with its own monthly bill. Admin two-step login needs a plugin. The build is heavy. |
-| **B** | **Strapi 5 plus a separate front end (chosen)** | Uses the MySQL included with the hosting plan, so there's no outside database and the data stays on the plan. Mature editor interface. Custom admin roles are free in the Community edition. | Two apps, or four once staging is counted. Scheduled publishing (Releases) is in Strapi's paid plan. Admin two-step login isn't built in. Strapi isn't one of Hostinger's auto-detected frameworks, so it deploys as "Other". |
-| C | **Our own Express or Fastify app on MySQL** | Full control and the smallest third-party footprint. | We'd build the admin, roles, drafts, scheduling and media library ourselves. That's weeks the schedule doesn't have, and more code to security-review. |
+| A | **Payload CMS and Next.js in one app** | One TypeScript app, so one deploy. Drafts, versions, preview and field-level access control are built in. | Payload officially supports only MongoDB and Postgres, so the database would change from the MariaDB the build already uses. Admin two-step login needs a plugin. The build is heavy. |
+| **B** | **Strapi 5 plus a separate front end (chosen)** | Runs on the MariaDB 11.4 that Strapi recommends, on our own server, so the data stays on the server. Mature editor interface. Custom admin roles are free in the Community edition. | Two apps, or four once staging is counted. Scheduled publishing (Releases) is in Strapi's paid plan. Admin two-step login isn't built in. |
+| C | **Our own Express or Fastify app on MariaDB** | Full control and the smallest third-party footprint. | We'd build the admin, roles, drafts, scheduling and media library ourselves. That's weeks the schedule doesn't have, and more code to security-review. |
 
 Two other options were ruled out. Directus charges a licence fee above US$5M annual revenue. WordPress isn't Node or TypeScript.
 
-**Slatech picked B.** Claude had recommended A. A's outside database would also have broken the no-monthly-cost rule that came later, so B is the better fit now. B's costs are handled like this:
+**Slatech picked B.** Claude had recommended A while the plan was managed hosting. The move to a VPS made A possible, but B stays: it is already built on (Tasks 1, 2 and 5 of the first plan), and MariaDB 11.4 is the version Strapi recommends. B's costs are handled like this:
 
-- **Scheduled publishing:** our own `publishAt` / `unpublishAt` fields and a cron job (§9).
+- **Scheduled publishing:** our own `publishAt` / `unpublishAt` fields and a scheduled job inside Strapi (§9).
 - **Two-step login:** Cloudflare Access in front of the admin, plus a free TOTP plugin (§10.2).
-- **Deploying as "Other":** a go/no-go deployment test before anything else (§13, Phase 0).
 
 ### Front end: Astro (Claude's call)
 
 The front end is **Astro**, rendered on the server through its Node adapter:
 
 - It ships plain HTML and adds JavaScript only where a page needs it: the hero slider, mega-menu, tabs, filters and booking calendar. That suits the mobile Core Web Vitals targets.
-- It runs as one light Node process, which matters when four apps share one thread limit.
-- Hostinger lists it as a supported framework.
+- It runs as one light Node process per environment, which keeps memory low on a shared server.
+- It is a plain Node app, so it runs the same on the server as in CI.
 - Its server routes handle forms and portal sessions.
 
 Next.js would also work. It was set aside because it uses more threads and puts React on every page.
@@ -106,43 +102,40 @@ Next.js would also work. It was set aside because it uses more threads and puts 
 ```
              Browser
                 │  HTTPS
-         ┌──────▼───────────────────────────────────────────┐
-         │ Cloudflare Free: DNS, CDN cache, free managed WAF│
-         │ rules, Turnstile, Access (admin, staging)        │
-         └──────┬───────────────────────────┬───────────────┘
-                │                           │
-   www.<domain> │                           │ cms.<domain>
-   ┌────────────▼──────────┐   server-to-   ┌▼────────────────────────────┐
-   │ Astro (SSR, Node)     │───server only─►│ Strapi 5 (admin + API)      │
-   │ pages, forms, portal  │  API token +   │ content, portal users,      │
-   │ sessions, /media      │  shared secret │ submissions, file checks,   │
-   └──────────┬────────────┘                │ encryption, jobs, audit     │
-              │ browser ⇄ /transfer/*       └──┬───────────────┬──────────┘
-              │ (signed, short-lived tokens)   │               │
-              └───────────────────────────────►│               │
-   ┌───────────────────────────────────────────▼──┐   ┌────────▼────────┐
-   │ Hostinger disk, outside deploy folders:      │   │ Hostinger MySQL │
-   │ ~/oc-data/media     (public images, docs)    │   └─────────────────┘
-   │ ~/oc-data/private   (encrypted uploads)      │
-   │ ~/oc-data/tmp       (chunked uploads)        │
-   └──────────────────────────────────────────────┘
-   Free or existing outside services: Zoho CRM (existing), Zoho SalesIQ (free),
-   newsletter (free plan, D7), calendar (existing Google/Microsoft, D9),
-   Google Maps Embed, GA4, Clarity, Sentry (free), UptimeRobot (free),
-   Cloudflare R2 (free tier, encrypted off-site backups), Hostinger SMTP (email)
-   hPanel cron ──► POST cms.<domain>/internal/jobs/tick  (every minute)
+         ┌──────▼────────────────────────────────────────┐
+         │ Cloudflare Free: DNS, CDN cache, free managed │
+         │ WAF rules, Turnstile, Access (admin, staging) │
+         └──────┬────────────────────────────────────────┘
+                │  the server accepts only Cloudflare's traffic
+   ┌────────────▼─────────────────────────────────────────────────┐
+   │ Hostinger VPS (Ubuntu 24.04 LTS): firewall, Nginx            │
+   │                                                              │
+   │  www.<domain>  ─► Astro (SSR) ──┐ server-to-server only      │
+   │  cms.<domain>  ─► Strapi 5     ◄┘ (API token + shared secret)│
+   │  staging / cms-staging: the same two apps, second environment│
+   │                                                              │
+   │  MariaDB 11.4   (local only; one database per environment)   │
+   │  ClamAV clamd   (local socket; scans every upload)           │
+   │  /var/lib/oc/<env>/{media,private,tmp}   (the VPS's NVMe)    │
+   └────────────┬─────────────────────────────────────────────────┘
+                │  nightly, encrypted
+         Cloudflare R2 (free tier): off-site backups
 ```
 
-**Hostinger sites.** There are four. Each is its own Hostinger "website" with its own Node app, database and data folder.
+Browsers upload and download files through `/transfer/*` with signed, short-lived tokens. Free or existing outside services: Zoho CRM (existing), Zoho SalesIQ (free), newsletter (free plan, D7), calendar (existing Google or Microsoft, D9), Google Maps Embed, GA4, Clarity, Sentry (free), UptimeRobot (free), Hostinger SMTP (email).
 
-| Site | App | Git branch | Database | Data folder |
-|---|---|---|---|---|
-| `www.<domain>` | Astro | `main` | none (reads through Strapi) | reads `~/oc-data/media` |
-| `cms.<domain>` | Strapi | `main` | `oc_prod` | `~/oc-data/` |
-| `staging.<domain>` | Astro | `staging` | none | reads `~/oc-data-staging/media` |
-| `cms-staging.<domain>` | Strapi | `staging` | `oc_staging` | `~/oc-data-staging/` |
+**One server, two environments.** Each environment has its own system user, systemd services, database and data folder. They share the operating system, Nginx, the MariaDB server and ClamAV.
 
-`~` is the hosting account's home directory. It sits outside `public_html` and `hbuilds/`, so the web server never serves it and deploys never touch it. Phase 0 proves both points.
+| Environment | Hosts | Git branch | systemd services | Database | Data folder |
+|---|---|---|---|---|---|
+| Production | `www.<domain>`, `cms.<domain>` | `main` | `oc-web@prod`, `oc-cms@prod` | `oc_prod` | `/var/lib/oc/prod/` |
+| Staging | `staging.<domain>`, `cms-staging.<domain>` | `staging` | `oc-web@staging`, `oc-cms@staging` | `oc_staging` | `/var/lib/oc/staging/` |
+
+`/var/lib/oc` sits outside the folders that deploys replace, and Nginx never serves it. Each environment's user can read only its own folder and database.
+
+**Who runs what (Claude's call).** systemd runs the four Node apps, each as its own unprivileged user with sandboxing (§10.9). Docker isn't used in production: fewer moving parts, and no group that is effectively root. MariaDB comes from MariaDB's official 11.4 repository and ClamAV from Ubuntu's packages. The apps are built in CI, never on the server, so the server needs no compiler and no build memory.
+
+**Deploys (Claude's call).** A push to `staging` deploys to staging. A push to `main` deploys to production after a manual approval in GitHub. GitHub Actions builds and tests, then uploads the release over SSH as a restricted deploy user whose key can run only one forced command, `deploy-release`. That command unpacks the release into `/opt/oc/<env>/releases/<commit>`, switches the `current` symlink, restarts the services, waits for the health checks (`/healthz` and `/_health`), and switches back by itself if they fail. The deploy key can't open a shell or touch anything else.
 
 **What staging is for (decided by Slatech, 23 November).** Staging tests *code, design and new templates* before they reach the live site. It does not move content.
 - **Content is checked as a draft on the live site.** An editor saves a draft, opens the preview button in the admin, and then publishes or schedules it. The preview shows the draft on `www.<domain>` (§12).
@@ -154,18 +147,19 @@ Next.js would also work. It was set aside because it uses more threads and puts 
 - `apps/web`: the Astro front end.
 - `apps/cms`: Strapi.
 - `packages/shared`: zod schemas for every form, design tokens, generated Strapi types, the time and status rules in §8, and the file-check rules in §10.4.
+- `infra/`: the server setup as scripts: bootstrap and hardening, systemd units, Nginx configuration and a verification script (§10.9).
 
-Each Hostinger site points at its own root directory in the repo. Phase 0 confirms that Hostinger handles a pnpm monorepo. If it doesn't, use two repositories.
+CI builds each app into a self-contained release. The server never builds anything.
 
 **Who can call Strapi.**
 - Strapi's public content API is switched off for the public role. Astro reads content with a read-only API token plus a shared-secret header, and Strapi refuses API calls that lack both.
 - Editors reach `cms.<domain>/admin` only through Cloudflare Access.
 - A few paths are open on the internet, each with its own check:
-  - `/internal/*`, used by cron and webhooks, requires a bearer secret.
+  - `/internal/*`, used by webhooks and monitoring, requires a bearer secret.
   - `/transfer/*`, used by browsers to upload and download files, requires a signed token that expires within minutes.
   - `/_health`.
 
-**Hostinger plan (open item O2).** The four Node apps share one process limit. Cloud Startup or above (NPROC 200) gives headroom. Business (NPROC 120) may be enough, but Phase 0 must measure real thread use for Strapi and Astro under load before committing. The plan must fit the hosting line already in the quote.
+**Server size (open item O2, Claude's call).** A rough memory budget for both environments on 8 GB: Strapi about 1 GB each, Astro about 0.3 GB each, MariaDB about 1 GB, ClamAV about 1.5 GB, and the operating system with Nginx about 0.5 GB. That's about 6 GB, so KVM 2 fits with about 2 GB of headroom plus swap. These are estimates. The baseline phase measures the real numbers under load, and the plan moves up a size if free memory runs short. Disk: 100 GB holds the operating system, two environments, uploads and several nightly dumps for a long time; the baseline records the starting size.
 
 ## 6. Outside services: free tiers or existing subscriptions only (Claude's call)
 
@@ -178,17 +172,16 @@ Each Hostinger site points at its own root directory in the repo. Phase 0 confir
 | OysterCore's existing Google Workspace or Microsoft 365 (D9) | Calendar for bookings (LEAD-05) | Existing subscription | — |
 | Google Maps Embed API | Office locator (CON-02) | No usage charge | The builder confirms how the key is set up. Directions links need no key. |
 | GA4, Search Console, Microsoft Clarity | Analytics (PRD §8) | $0 | — |
-| Sentry, free plan | Error tracking | $0 | Errors beyond the monthly quota are dropped. Logs on Hostinger remain. |
+| Sentry, free plan | Error tracking | $0 | Errors beyond the monthly quota are dropped. Server logs (journald) remain. |
 | UptimeRobot, free plan | 24/7 uptime monitoring, alerts by email and app (PRD §8) | $0 | Checks every 5 minutes. |
 | Cloudflare R2, free tier | Encrypted off-site backups (§11) | $0 while storage stays under 10 GB | The retention rule keeps it under, with an alert at 8 GB. Cloudflare needs a payment method on file to switch on R2. If OysterCore won't add one, backups go to their existing Google Workspace or Microsoft 365 storage instead. |
-| Hostinger email (SMTP) | Notifications and confirmations | Included in the package's mailboxes | Phase 0 records the mailbox's daily sending limit. Form volume is far below it. |
+| Hostinger email (SMTP) | Notifications and confirmations | Included in the package's mailboxes | The email send test (Phase 2) records the mailbox's daily sending limit. Form volume is far below it. |
 
 All accounts are opened in OysterCore's name, or in a form that can be transferred at handover (PRD §10 Handover, §13). See O3.
 
-**What zero cost gives up, compared with the first revision of this design:**
-- **Real antivirus scanning of uploads.** It's replaced by checks that strip active content (§10.4, O8).
+**What the free tiers give up:**
 - **Cloudflare Pro's fuller WAF and rate limiting.** Rate limiting moves into the app (§10.5).
-- **Cloud object storage.** Files live on the Hostinger disk, encrypted (§10.4).
+- **Cloud object storage.** Files live on the VPS disk, encrypted, with an encrypted off-site copy (§10.4, §11).
 
 ## 7. Content model (Strapi)
 
@@ -308,29 +301,26 @@ All of these live in `packages/shared` and are covered by unit tests. They use o
 **Vacancies (CAR-01).** A vacancy is listed only while now < its closing time.
 
 **Scheduled publishing (CMS-03)**
-- An entry with a future `publishAt` stays a draft until the cron tick publishes it. `unpublishAt` does the reverse.
-- The public site shows the change within about a minute (NEW-02): one minute of cron, plus up to 60 seconds of edge caching.
+- An entry with a future `publishAt` stays a draft until the scheduler publishes it (§9). `unpublishAt` does the reverse.
+- The public site shows the change within about a minute (NEW-02): up to one minute for the scheduler, plus up to 60 seconds of edge caching.
 
-## 9. Work done without background processes
+## 9. Background jobs
 
-hPanel cron calls `POST https://cms.<domain>/internal/jobs/tick` **every minute**, with a bearer secret. Phase 0 confirms that Hostinger allows one-minute cron.
+Strapi runs as a normal always-on service, so scheduled work runs inside it with Strapi's built-in cron (`config/cron-tasks`). Nothing outside calls it, and no keep-alive pings are needed.
 
-**How a tick runs**
-1. It takes a lease row in MySQL, so ticks that overlap skip instead of running twice.
-2. It runs whatever jobs are due, within a 60-second budget.
-3. It returns. Anything unfinished carries over to the next tick.
+**How a job runs**
+1. Each job takes a lease row in MariaDB, so a restart or an overlap never runs it twice.
+2. It does its work and releases the lease. If Strapi stops mid-job, the lease expires and the next run picks the work up again.
+3. Each run writes a heartbeat (job name, time, result), which monitoring reads (§11).
 
 **Jobs**
-- **Scheduled publish and unpublish.**
-- **Outbox:** emails and Zoho CRM pushes, retried with exponential backoff. After 10 failures a message is dead-lettered and an alert goes out.
-- **Temp cleanup:** deletes unfinished chunked uploads older than 24 hours.
-- **Retention:** runs daily and deletes personal data and files past their retention period (O5).
-- **Search index catch-up:** a safety net. The index is normally updated by lifecycle hooks.
-- **Nightly backup** (§11). It runs in steps across several ticks, to stay inside the 120-second limit.
+- **Scheduled publish and unpublish.** Every minute.
+- **Outbox:** emails and Zoho CRM pushes, retried with exponential backoff. After 10 failures a message is dead-lettered and an alert goes out. Every minute.
+- **Temp cleanup:** deletes unfinished chunked uploads older than 24 hours. Hourly.
+- **Retention:** deletes personal data and files past their retention period (O5). Daily.
+- **Search index catch-up:** a safety net, because the index is normally updated by lifecycle hooks. Every 15 minutes.
 
 **Sending straight away.** Emails and CRM pushes are tried first inside the request itself, with a 5-second timeout. They fall back to the outbox only if that fails. That is what meets "both emails arrive within a minute" (LEAD-03).
-
-**Keeping the apps warm.** A second cron calls `https://www.<domain>/healthz` every 5 minutes, so the front end is never cold when a visitor arrives. The one-minute tick already keeps Strapi awake.
 
 ## 10. Security design
 
@@ -353,12 +343,13 @@ The bar is OWASP ASVS 4.0 level 2 for everything that handles personal data or b
 - **Cloudflare Access** (free for up to 50 users) protects `cms.<domain>/admin` and every staging host. Editors sign in with OysterCore's Google or Microsoft identity, or with Cloudflare's emailed one-time code. **This is the required second factor, and it doesn't depend on a Strapi plugin.**
 - **Strapi's own login** sits behind it. Passwords are at least 12 characters. Lockout and rate limits are on.
 
-**TOTP plugin.** `strapi-identity` (MIT licence, supports Strapi 5) is evaluated in Phase 0 as a further layer. It's added only if it passes code review and is actively maintained. Either way, Cloudflare Access alone meets CMS-02.
+**TOTP plugin.** `strapi-identity` (MIT licence, supports Strapi 5) is evaluated in Phase 1, when the admin roles are built, as a further layer. It's added only if it passes code review and is actively maintained. Either way, Cloudflare Access alone meets CMS-02.
 
-**The hosting account itself.** Anyone who can sign in to hPanel can reach the database, the files and the environment variables. So:
-- Two-step login is mandatory on the Hostinger account.
-- There are two named owners, one at Slatech and one at OysterCore after handover.
-- Access is never shared as a single password.
+**Access to the server and the hosting account.** Anyone with a shell on the VPS, or in Hostinger's control panel, can reach the database, the files and the secrets. So:
+- Two-step login is mandatory on the Hostinger account and on GitHub.
+- SSH uses keys only, one named key per person, with no password login and no root login (§10.9).
+- There are two named owners, one at Slatech and one at OysterCore after handover (O12).
+- Access is never shared as one password or one key.
 
 **Admin roles** (Strapi's custom roles, which are free):
 - Super Admin: Slatech only, for emergencies, two named accounts.
@@ -409,26 +400,31 @@ It's append-only at the API level and goes into the nightly backup.
 ### 10.4 Files and uploads (PRC-06, PRC-07, CAR-02, DLC-03)
 
 **Where files live**
-- **Public media:** `~/oc-data/media/`.
+- **Public media:** `/var/lib/oc/<env>/media/`.
   - Strapi's media library writes here through a small custom upload provider.
   - Strapi creates the responsive image sizes with sharp.
   - File names are content-hashed. Astro serves them at `www.<domain>/media/*` with `Cache-Control: public, max-age=31536000, immutable`, so Cloudflare caches them and the app is rarely hit.
-  - If Phase 0 finds the Astro site can't read this folder, Strapi serves it at `cms.<domain>/media/*` instead.
-- **Private uploads:** `~/oc-data/private/`. This holds bids, vendor documents, CVs, quote attachments and investor-only documents.
+  - The CMS serves the same folder at `cms.<domain>/media/*`, so the admin's thumbnails load.
+- **Private uploads:** `/var/lib/oc/<env>/private/`. This holds bids, vendor documents, CVs, quote attachments and investor-only documents.
   - **Every file is encrypted at rest** with AES-256-GCM, in chunks.
-  - Each file gets its own random data key. That key is wrapped by a master key held only in an environment variable.
-  - So a file copied through FTP or the File Manager, or taken from a backup, is unreadable on its own. Someone with full hPanel access could still read the environment variable, which is why two-step login on hPanel is mandatory (§10.2).
+  - Each file gets its own random data key. That key is wrapped by a master key held only in the environment's secret file (`/etc/oc/<env>.env`, readable by root and that environment's service user only).
+  - So a file copied off the disk, or taken from a snapshot or a backup, is unreadable on its own. Someone with root on the server could still read the key, which is why access to the server is locked down (§10.9).
   - Only Strapi decrypts files.
 
-**How an upload works.** Files are uploaded in chunks, because of the 120-second limit.
+**How an upload works.** Files are uploaded in chunks, so an interrupted upload on a poor connection resumes instead of starting again.
 1. The signed-in user picks a file. Astro asks Strapi for an upload slot.
 2. Strapi checks the declared type against that form's allow-list, the declared size against its limit, and the number of files. It then returns a signed upload token for `cms.<domain>/transfer/upload/:token`, valid for 15 minutes and tied to the user, form, size and type. CORS allows only `www.<domain>`.
-3. The browser sends the file in **5 MB chunks**, each as its own request. That's about 40 seconds per chunk even at 1 Mbps, well under the 120-second limit. An interrupted upload resumes from the last chunk received. Chunks collect in `~/oc-data/tmp/`.
+3. The browser sends the file in **5 MB chunks**, each as its own request. An interrupted upload resumes from the last chunk received. Chunks collect in `/var/lib/oc/<env>/tmp/`.
 4. Once the last chunk arrives, Strapi checks that the SHA-256 the browser sent matches the assembled file. It then runs **the file checks** below, encrypts the file into the private store, deletes the temporary copy, and tells the browser whether the file was accepted or rejected, and why.
 
 **Size limits.** Each file is limited to 25 MB by default, and D4 may set it lower. A submission can carry up to 10 files, so a large proposal can be split.
 
-**The file checks.** These run inside Strapi in Node, at no cost. They are content disarm, not antivirus.
+**The file checks.** Every upload gets a real malware scan and then a content check. All of it is free.
+- **Malware scan (ClamAV).** The assembled file is streamed to ClamAV's local daemon (`clamd`) before anything else is done with it.
+  - A detection rejects the file and writes an audit event.
+  - **If the daemon can't be reached, the upload is refused** (fail closed) and the user is asked to try again. An alert goes out.
+  - Signatures update automatically several times a day through `freshclam`. The baseline phase tests the whole path with the EICAR test string.
+  - Files are scanned when they arrive. They are stored encrypted, so they aren't rescanned later.
 - **Real type.**
   - The file's magic bytes must match an allowed type for that form. The extension and the browser's claim are ignored.
   - Allowed by default: PDF, JPG and PNG for vendor documents, bids and quote attachments; PDF and DOCX for CVs.
@@ -447,14 +443,13 @@ It's append-only at the API level and goes into the nightly backup.
   - embedded OLE objects;
   - external relationships (`TargetMode="External"`, which is how remote-template attacks work);
   - more than 50 MB uncompressed, more than 1,000 entries, or a compression ratio above 100:1 (decompression bombs).
-- **Optional known-malware hash check (Claude's call, Phase 0 to evaluate).** The file's SHA-256 is looked up on abuse.ch MalwareBazaar's free API. Only the hash leaves the server, never the file. It's added only if the terms allow commercial use.
 - **How files are served.** Files always download as attachments, with `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff` and a generic content type for anything that isn't an image. They are never displayed inside our pages.
-- **Staff computers.** As a compensating control, OysterCore IT confirms that staff computers run endpoint antivirus, so a file is also scanned when it's opened.
+- **Staff computers.** As a second layer, OysterCore IT confirms that staff computers run endpoint antivirus, so a file is also scanned when it's opened.
 
 **What this does and doesn't cover.**
-- **It covers** the ways documents usually carry malware: macros, PDF scripts and launch actions, embedded files, disguised types, and decompression bombs.
-- **It doesn't cover** a file that exploits a bug, not yet publicly known, in a PDF reader or in Word. That file could still pass the checks.
-- **The PRD needs rewording.** PRC-07's acceptance test ("a disallowed or infected file is rejected") and PRD §8's "malware scanning" overstate what this does. See O8 for the proposed wording.
+- **It covers** known malware (ClamAV) and the ways documents usually carry it: macros, PDF scripts and launch actions, embedded files, disguised types, and decompression bombs.
+- **It doesn't cover** a brand-new exploit that no scanner knows yet. No scanner does. That is why the content checks still run, and why files only ever download as attachments.
+- **PRC-07 and PRD §8 are met as written:** uploads are limited by type and size and scanned for malware, and a disallowed or infected file is rejected.
 
 **How a download works.** There are two routes, one for each kind of account. Both use one checking service inside Strapi, so the rules can't drift apart.
 - **Portal users** (vendors opening their own documents, approved investors): `GET https://www.<domain>/files/:id`.
@@ -463,7 +458,6 @@ It's append-only at the API level and goes into the nightly backup.
   3. Astro redirects to `cms.<domain>/transfer/download/:token`.
   4. Strapi decrypts and streams the file, with HTTP Range support.
 - **Staff** (Strapi admin users): from inside the admin. A button on the record calls `cms.<domain>/admin-files/:id`, which sits behind Cloudflare Access and needs the Strapi admin session. It runs the same check and audit, and returns the same kind of token.
-  - For files over about 25 MB, the button downloads in Range pieces and joins them in the browser, so each request stays under the 120-second limit.
 
 **Who may download what**
 - **Bids:** Procurement Officers only. If D4 chooses sealed bids, **only after `closesAt`**. Strapi refuses to issue a token before then. Only Strapi can decrypt, so this is enforced in one place.
@@ -490,7 +484,7 @@ Every form posts to an Astro server route. That route:
 4. Validates the input with the shared zod schema.
 5. Applies the **app rate limits**.
 
-**Rate limits.** Cloudflare Free allows only one edge rate-limiting rule, and we spend it on the sign-in, sign-up and password-reset paths together. Everything else is limited in the app, using counters in MySQL kept per IP hash and per email over sliding windows. Expired counters are cleaned by the retention job.
+**Rate limits.** Cloudflare Free allows only one edge rate-limiting rule, and we spend it on the sign-in, sign-up and password-reset paths together. Everything else is limited in the app, using counters in MariaDB kept per IP hash and per email over sliding windows. Expired counters are cleaned by the retention job.
 
 The route then saves the submission to Strapi, together with the version of the consent text the visitor saw. Consent text is versioned in the editing system (CMP-02). Finally it pushes the submission to Zoho CRM and sends both emails (§9).
 
@@ -515,7 +509,7 @@ The route then saves the submission to Strapi, together with the version of the 
 ### 10.7 Supply chain and secrets
 
 **Secrets**
-- Secrets are kept only in Hostinger environment variables and the CI secret store, with a separate set for each environment.
+- Secrets are kept only in `/etc/oc/<env>.env` on the server (readable by root and that environment's service user, and loaded by systemd) and in GitHub's encrypted secrets, with a separate set for each environment. The only secret in GitHub is the restricted deploy key.
 - The file master key and the backup public key are generated at setup.
 - The backup *private* key is never stored on the server. It's kept offline by two named people, one at Slatech and one at OysterCore.
 - A rotation runbook goes into the handbook. Rotating the file master key re-wraps the data keys; files aren't re-encrypted.
@@ -525,7 +519,7 @@ The route then saves the submission to Strapi, together with the version of the 
 - Renovate for updates: weekly batches, with security updates immediately.
 - `pnpm audit`, OSV-Scanner and gitleaks run in CI on GitHub Actions' free minutes.
 
-**Branch protection.** Hostinger deploys on every push, so `main` and `staging` are protected branches. A merge needs CI passing and one review.
+**Branch protection.** `main` and `staging` are protected branches, and a push to either one deploys. A merge needs CI passing and one review, and production deploys need a manual approval in GitHub.
 
 ### 10.8 Data protection (NDPA 2023)
 
@@ -535,30 +529,56 @@ The route then saves the submission to Strapi, together with the version of the 
 - **Data-subject requests.** A runbook covers exporting and deleting a person's data.
 - **Staging data.** Staging is filled from production only after personal data is scrubbed.
 - **Where the data goes:**
-  - It lives in the Hostinger data centre chosen at setup.
+  - It lives on the Hostinger VPS, in the data-centre location chosen at order.
   - It passes through Cloudflare.
   - CRM data goes to Zoho.
   - Encrypted backups go to Cloudflare R2.
 
   The DPO signs off these transfers (O4).
 
+### 10.9 The server
+
+The aim is a server that is boring to attack. `infra/` holds the setup as scripts, and `infra/verify` checks every item below and fails loudly. It runs after setup, after every change to `infra/`, and monthly.
+
+**Access**
+- SSH: keys only, one named key per person, no passwords, no root login, a non-default port, and only named admins allowed. fail2ban watches SSH.
+- Everyone works as a named user with `sudo`, and the sudo log is kept.
+- The deploy user can run one forced command and nothing else (§5).
+
+**Network**
+- The firewall (ufw) denies everything inbound except SSH and ports 80 and 443. Ports 80 and 443 accept only Cloudflare's published address ranges, and a systemd timer refreshes that list weekly.
+- Nginx also requires Cloudflare's client certificate (Authenticated Origin Pulls). A request that reaches the server's IP directly is refused even if the firewall list is stale.
+- MariaDB listens on localhost only, with one database user per environment limited to its own database. ClamAV listens only on a local socket. The Node apps listen on localhost and are reached only through Nginx.
+- TLS between Cloudflare and Nginx uses a Cloudflare origin certificate, in "Full (strict)" mode, TLS 1.2 or newer. Nginx hides its version and sets request size and timeout limits.
+
+**Operating system**
+- Automatic security updates (`unattended-upgrades`) are on, with an email when a reboot is needed. The reboot window is agreed with OysterCore (O11).
+- Time sync is on, a swap file is sized for the memory budget, and journald logs are kept with rotation.
+- Kernel and network hardening through sysctl, unused services off, and auditd rules for logins, sudo and changes to `/etc/oc`.
+- Lynis runs after setup and monthly. The hardening index and its warnings go in the handbook.
+
+**Services**
+- Each Node app runs under systemd as its own unprivileged user, with `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict`, `ProtectHome`, a short list of writable paths, and a memory cap so one runaway app can't starve the others.
+- Secrets are files readable only by root and the service user. They are never in the repo or on a command line.
+
+Backups and recovery are in §11.
+
 ## 11. Reliability, backups, monitoring
 
 **Backups**
-- **First layer:** Hostinger's own daily backups, included in the plan. They cover the databases and the home directory, including `~/oc-data`.
-- **Off-site copy** (PRD §8): the nightly backup job.
-  1. It dumps each production database.
-  2. It packs that dump with a list of what changed in `~/oc-data` since the previous run.
+- **First layer:** Hostinger's weekly VPS backup (included in the plan, restored from Hostinger's dashboard), plus a manual snapshot before every production release or server change.
+- **Daily, off-site copy** (PRD §8): a systemd timer on the server runs the nightly backup, so it still runs if Strapi is down.
+  1. It dumps each environment's database.
+  2. It packs the dump with a list of what changed in `/var/lib/oc/<env>` since the previous run.
   3. It encrypts everything with the **backup public key**, so the server can make backups but can't read old ones.
   4. It uploads the result to **Cloudflare R2's free tier**. Private files are already encrypted, so they're copied as they are.
 - **Retention:** 14 daily and 8 weekly backups. An alert fires when storage reaches 8 GB of the 10 GB free limit.
-- **Restore tests:** one into staging before go-live (PRD §14 item 7), then monthly during the care period.
+- **Restore tests:** one onto a clean machine before go-live (PRD §14 item 7), then monthly during the care period.
 
 **Monitoring**
-- UptimeRobot (free) checks `www`, `cms/_health`, and the time of the last cron tick.
+- UptimeRobot (free) checks `www`, `cms/_health` and the job heartbeat.
 - Sentry (free) watches both apps.
-- The tick reports how long the outbox queue is, and alerts if it grows.
-- Disk use under `~/oc-data` is reported weekly against the plan's storage limit.
+- The server emails an alert for: a failed job, a growing outbox queue, disk above 80%, memory pressure, a pending reboot, a failed backup, ClamAV signature updates not running, and any `infra/verify` failure.
 
 ## 12. Front end
 
@@ -600,7 +620,7 @@ The route then saves the submission to Strapi, together with the version of the 
 Every one must work by keyboard and with a screen reader. The prototype's focus styles, reduced-motion handling and ARIA labels are the starting point.
 
 **Search** (SRC-01)
-- A MySQL FULLTEXT index on the **Search entry** table, kept current by lifecycle hooks.
+- A MariaDB FULLTEXT index on the **Search entry** table, kept current by lifecycle hooks.
 - **Only published, public items are indexed**, so gated content can't show up in results.
 
 **WhatsApp** (CON-01). A `wa.me` link on every page, using the number or numbers from D6.
@@ -610,7 +630,7 @@ Every one must work by keyboard and with a screen reader. The prototype's focus 
 **Draft preview.** The preview button in Strapi opens `www.<domain>/preview?token=…`.
 - The token is signed by Strapi, tied to one entry, and expires after 10 minutes.
 - The page renders the draft with `noindex`, `Cache-Control: private, no-store`, and a visible "Draft preview" banner.
-- Cloudflare Access also protects the `/preview` path, so only signed-in staff reach it. Phase 0 confirms Access can protect a path on the public host. If it can't, the signed token is the only control.
+- Cloudflare Access also protects the `/preview` path, so only signed-in staff reach it. The baseline phase confirms Access can protect a path on the public host. If it can't, the signed token is the only control.
 
 **SEO** (PRD §9)
 - `sitemap.xml` and `robots.txt` are generated from Strapi.
@@ -632,20 +652,19 @@ Public HTML is cached at Cloudflare for 60 seconds, with stale-while-revalidate.
 
 ## 13. Delivery phases
 
-**Phase 0: deployment test (2–3 days, go/no-go).** On the real Hostinger plan, prove each of these:
-1. Strapi (deployed as "Other") and Astro build and run from the monorepo.
-2. Strapi connects to Hostinger's MySQL or MariaDB. Record the version.
-3. The Strapi admin builds within Hostinger's build limits.
-4. **The app can write to `~/oc-data` and the files survive a redeploy.** The Astro site can read `~/oc-data/media` (same account user). The folder isn't web-served.
-5. A chunked upload of a 25 MB file works over a throttled connection, through the checks, encryption and a Range download.
-6. One-minute cron reaches `/internal/jobs/tick`.
-7. Cloudflare Free sits in front of all four hosts, with Access on admin and staging.
-8. Email sends through Hostinger SMTP. Record the daily limit.
-9. An encrypted backup reaches R2 and is restored into staging.
-10. Thread use under a 50-user load test stays inside the plan's process limit.
-11. Custom RBAC conditions work in Strapi Community.
+**Phase 0: server baseline (2 to 3 days).** On the real Hostinger VPS, set up and prove each of these. Most are a script run and a check, so this phase carries less risk than a hosting go/no-go.
+1. Order the VPS (KVM 2, Ubuntu 24.04 LTS, 24-month term, data centre per O4). Put the test hostnames behind Cloudflare.
+2. Run the `infra` bootstrap and `infra/verify`. Every item in §10.9 passes. Record the Lynis hardening index.
+3. Install and record the versions of Node (22.23.4 or newer), MariaDB 11.4, ClamAV and Nginx.
+4. Deploy the Strapi and Astro skeletons to the staging hostnames through the real pipeline (§5). Both health checks answer, and a deliberately broken release rolls back by itself.
+5. Files: a file written under `/var/lib/oc/<env>` survives a redeploy and is not web-served. The web app's user can read the media folder. ClamAV rejects the EICAR test string.
+6. Cloudflare Free sits in front of the hostnames. A request straight to the server's IP is refused. Access protects the admin and staging.
+7. A 50-user load test. Record memory, CPU and disk with both environments and ClamAV running. If free memory falls below 1 GB, move up a plan size (O2).
+8. Custom RBAC conditions work in Strapi Community (a local test; no server needed).
 
-**If items 1–4 fail, stop and take it to Slatech.** Moving Strapi to a VPS or switching to approach A each carry a monthly cost, so this is Slatech's decision, not one to work around quietly.
+Three checks wait for the code they test: the email send test (Phase 2), the nightly backup and its restore test (Phase 4), and the throttled 25 MB chunked upload (Phase 3).
+
+**If items 2 or 4 fail, stop and take it to Slatech.** The rest of the build relies on them.
 
 **Phase 1: foundation.** The content model, roles and conditions, the audit log, the design system, the header and footer, the home page, Our Group, the company template, CI, and staging live. The **project case study and portfolio prototype board** is designed in the first week, so the sponsor can approve it before Phase 2 builds projects.
 
@@ -678,7 +697,7 @@ Public HTML is cached at Cloudflare for 60 seconds, with stale-while-revalidate.
 
 **Testing**
 - **Unit tests (vitest):** the time and status rules, routing, schema building, the file checks and encryption. File checks get a fixture set: a PDF with JavaScript, a PDF with an embedded file, an encrypted PDF, a DOCX with a macro, a DOCX with an external template, a decompression bomb, a renamed EXE, and clean files. Tender closing gets tests one second either side of `closesAt`.
-- **Integration tests:** Strapi against MySQL or MariaDB, at the version Phase 0 recorded, in GitHub Actions.
+- **Integration tests:** Strapi against MariaDB 11.4, in GitHub Actions.
 - **End-to-end tests (Playwright, on staging):** every PRD acceptance criterion a browser can show. That includes one test per form, each portal from start to finish, a signed-out request for an investor file being refused, and a confidential project hiding its client.
 - **Accessibility:** axe on every template.
 - **Performance:** Lighthouse CI for the budgets in §12.
@@ -701,16 +720,18 @@ Public HTML is cached at Cloudflare for 60 seconds, with stale-while-revalidate.
 
 | # | Item | Owner | Why it matters |
 |---|---|---|---|
-| O1 | The PRD (§4.1, §8, §10) and the quote promise a "dedicated server". The site will run on managed shared hosting. | Slatech, with OysterCore, as a written change request under PRD §16 (the PRD is signed) | It's a contract statement that won't be true. |
-| O2 | Which Hostinger plan: Business, or Cloud Startup and above. | Slatech | Four Node apps share one process limit. Phase 0 measures it. The plan must fit the hosting line in the quote. |
+| O1 | **The "dedicated server" wording.** The PRD (§4.1, §8, §10) and the quote promise a "dedicated server" with guaranteed, unshared resources. A Hostinger KVM VPS has vCPU and RAM that no other customer shares, but it is a virtual server, not separate hardware. Proposed clarification: "a dedicated virtual server (VPS) with guaranteed, unshared resources". | Slatech, with OysterCore, as a written change request under PRD §16 (the PRD is signed) | A clarification rather than a downgrade, but the PRD is signed, so say it in writing before launch. |
+| O2 | **VPS plan, term and payment.** KVM 2 is the minimum (§5); KVM 4 gives more headroom. A 24-month term covers the two years the package includes. Hostinger's page lists KVM plans from about $6.49 to $25.99 a month (not verified), and the quote prices hosting at ₦240,000 a year. | Slatech | The bill is Slatech's. Check that the plan fits the hosting line before ordering. |
 | O3 | Who owns the Cloudflare, GitHub, Sentry and UptimeRobot accounts, and how they're handed over. | Slatech and OysterCore | PRD §10 and §13 promise to hand over credentials. Accounts opened under Slatech will have to move. |
-| O4 | DPO sign-off on where the data goes: the Hostinger data-centre location, Zoho, Cloudflare, and encrypted R2 backups. | OysterCore's DPO | Required by NDPA 2023. Pick the data-centre location when the plan is set up. |
+| O4 | DPO sign-off on where the data goes: the VPS data-centre location, Zoho, Cloudflare, and encrypted R2 backups. | OysterCore's DPO | Required by NDPA 2023. Pick the data-centre location when the VPS is ordered. |
 | O5 | How long to keep CVs, vendor documents, bids, form submissions and audit logs. | OysterCore legal and HR | Drives the deletion job. The careers form already has a placeholder for this. |
 | O6 | Does OysterCore have a website live today? If so, its URLs need a 301 redirect map. | OysterCore | Avoids losing search rankings and existing links at launch. |
 | O7 | The final domain (`.com` or `.com.ng`) and where email is hosted. | OysterCore | Affects DNS, Cloudflare, email deliverability (SPF, DKIM, DMARC), and the cutover described in PRD §15. |
-| O8 | **The malware-scanning wording.** PRC-07, PRD §8 Security and §14 item 7 all promise "malware scanning". Zero cost rules out a real scanner. Proposed wording: "Uploads are limited by type and size, and checked and disarmed: macros, scripts, embedded files and disguised file types are rejected." Acceptance: "A disallowed or unsafe file is rejected." | Slatech, with OysterCore, as a written change request under PRD §16 (the PRD is signed) | Same as O1: the PRD must not promise what won't be delivered. If OysterCore later wants true scanning, it's a paid add-on that plugs in at step 4 of the upload flow. |
+| O8 | **Resolved by the VPS.** ClamAV scans every upload (§10.4), so PRC-07, PRD §8 Security and §14 item 7 are met as written. No change request. | — | Kept so the numbering of the other items doesn't change. |
 | O9 | **PRD wording that the answers to Q1 and Q2 change.** CMS-06 and PRD §11.1 say changes are "checked on staging" and new pages are "built on the staging environment first". Proposed wording: code, design and new templates are tested on staging, and content is checked as a draft preview before it's published. CAR-02 and CAR-03 say an application is "received with its CV attached" and "sent to the HR inbox". Proposed wording: HR is notified and opens the CV from the record. The quotation's staging line needs the same fix. | Slatech, with OysterCore, as a written change request under PRD §16 (the PRD is signed) | The acceptance tests as written would fail, even though the platform works as designed. |
 | O10 | **Who needs an admin account.** A list of everyone who has to open files or edit content: HR for each company, Group HR, procurement, the investor relations officer, communications, company editors, and anyone who owns a quote route. | OysterCore | Cloudflare Access is free for up to 50 users, and the design estimates 20 to 30. The four training sessions (PRD §13) must also cover opening files, not only editing content. |
+| O11 | **Who keeps the server patched after the care period.** The PRD covers security patching for five months. Operating-system security updates install automatically, but reboots, Node, Strapi and Astro updates and the monthly checks need a person. Options: a maintenance retainer (the quote lists ₦85,000 a month), or OysterCore's own IT with the handbook. | Slatech and OysterCore | A server nobody patches becomes the weakest part of the platform. |
+| O12 | **Server and account ownership at handover.** The Hostinger account, root and SSH keys, Cloudflare, GitHub, and the offline backup private key (two named holders). | Slatech and OysterCore | PRD §10 and §13 promise credential handover. A VPS has more to hand over than managed hosting. |
 
 **Raised by the design review on 23 November**
 
@@ -728,7 +749,7 @@ These are the builder's calls:
 - Folder layout inside each app.
 - Component library and naming.
 - Test structure.
-- The exact Cloudflare rules.
+- The exact Cloudflare rules, firewall rules, Nginx configuration and systemd sandboxing options.
 - The CSP host list.
 - Where Turnstile sits on each form.
 - Email templates.
@@ -750,5 +771,5 @@ These are the builder's calls:
   - `Home (mobile)@2x.png`
   - `WhatsApp Image 2026-11-09 at 8.17.06 PM.jpeg`, the client's annotated hero screenshot.
 - **What OysterCore has to supply:** `OYSTERCORE_Information_Request.pdf`.
-- **Hostinger limits:** https://www.hostinger.com/support/hostinger-node-js-limits-for-web-and-cloud-plans/
+- **Hostinger VPS plans:** https://www.hostinger.com/vps-hosting
 - **Strapi supported databases:** https://docs.strapi.io/snippets/supported-databases

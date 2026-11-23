@@ -2,38 +2,38 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prove OysterCore can run on Hostinger managed Node.js (Phase 0, a go/no-go), then ship the foundation to staging: monorepo, CMS content model for companies, home and site settings, design system, header and footer, the home hero slider, Our Group, company pages, audit log, admin roles and CI.
+**Goal:** Set up and harden the Hostinger VPS (Phase 0), then ship the foundation to staging: monorepo, CMS content model for companies, home and site settings, design system, header and footer, the home hero slider, Our Group, company pages, audit log, admin roles and CI.
 
-**Architecture:** One pnpm monorepo with three packages. `@oc/cms` is Strapi 5 on the plan's MySQL/MariaDB. `@oc/web` is Astro rendered on the server, which is the only caller of Strapi's content API. `@oc/shared` holds pure TypeScript both apps use. Uploaded media lives on disk outside the deploy folders. Cloudflare Free sits in front.
+**Architecture:** One pnpm monorepo with four parts. `@oc/cms` is Strapi 5 on MariaDB 11.4. `@oc/web` is Astro rendered on the server, which is the only caller of Strapi's content API. `@oc/shared` holds pure TypeScript both apps use. `infra/` sets up and checks the server. Everything runs on one Hostinger VPS behind Cloudflare Free, in two environments (production and staging). Uploaded media lives on disk outside the release folders.
 
-**Tech Stack:** Node 22 LTS, pnpm workspaces, TypeScript (strict), Strapi 5 (`mysql2`), Astro with the Node adapter, vitest, Playwright, axe, Lighthouse CI, GitHub Actions, MariaDB in Docker for local and CI.
+**Tech Stack:** Node 22 LTS, pnpm workspaces, TypeScript (strict), Strapi 5 (`mysql2`), MariaDB 11.4, Astro with the Node adapter, Ubuntu 24.04, Nginx, systemd, ClamAV, vitest, Playwright, axe, Lighthouse CI, shellcheck, GitHub Actions, Cloudflare Free.
 
 **Spec:** `docs/superpowers/specs/2026-11-23-oystercore-platform-design.md` (approved 23 November 2026). Client PRD: `Desktop\Claude\OYSTERCORE_PRD.pdf` (signed). Prototype markup: `design/prototype/`.
 
 **This is plan 1 of 4.** Later plans are written after Phase 0 reports, because its results can change them.
-- Plan 2: content sections, forms, Zoho CRM, search, consent and analytics (spec Phase 2).
-- Plan 3: the file pipeline and the procurement, careers and investor portals (Phase 3).
-- Plan 4: marketing pages, chat, newsletter, hardening and launch readiness (Phases 4 and 5).
+- Plan 2: content sections, forms and the email send test, Zoho CRM, search, consent and analytics (spec Phase 2).
+- Plan 3: the file pipeline (ClamAV scan, the throttled 25 MB chunked upload test) and the procurement, careers and investor portals (Phase 3).
+- Plan 4: marketing pages, chat, newsletter, the nightly backup job and its restore test, hardening and launch readiness (Phases 4 and 5).
 
 ## Global Constraints
 
 Every task's requirements include this section.
 
-- Node 22 LTS (`.nvmrc` = `22`). pnpm workspaces. TypeScript `strict: true`. Strapi 5.x with `mysql2`; MySQL 8.0+ or MariaDB 10.3+. Tests run on the DB version Phase 0 records.
+- Node 22 LTS, 22.23.4 or newer (`.nvmrc` = `22`). pnpm workspaces. TypeScript `strict: true`. Strapi 5.x with `mysql2`; MariaDB 11.4 (the version on the server, in CI and locally).
 - **No hard-coded content (HOM-02).** Names, colours, headlines, figures, photos and links come from Strapi. Navigation structure and UI labels may live in code.
 - Palette: deep navy `#0B1F3A`, group navy `#14305C`, gold `#C9A24B`, dark gold `#8A6A1C` (gold text on white), light grey `#F2F4F8`, slate `#4B5668`.
 - Type: Manrope 800 for headings, Inter 400 for body at 17px on desktop. Fonts are self-hosted; **no requests to Google Fonts**. Form fields are 48px tall.
 - Accessibility: WCAG 2.2 AA. Text contrast at least 4.5:1. Every interactive part works by keyboard and screen reader. Reduced motion is honoured.
 - Budgets: mobile LCP 2.5 s, CLS 0.1, at most 70 KB of compressed JavaScript per template.
-- **No monthly cost to the client.** Free tiers only. No AWS, no paid Strapi edition, no paid scanner.
-- Hostinger limits: requests are cut off at 120 s; no background workers, WebSockets or Redis; every deploy overwrites `public_html` and `hbuilds/`, so persistent files go in `~/oc-data` (env `OC_DATA_DIR`).
+- **No monthly cost to the client.** The VPS is paid by Slatech; everything else is a free tier or an existing subscription. No AWS, no paid Strapi edition, no paid scanner (ClamAV is free).
+- Hostinger VPS (KVM 2 minimum, Ubuntu 24.04 LTS): the server is set up and checked by the scripts in `infra/`; nothing is configured by hand without a matching change there. Persistent files live in `/var/lib/oc/<env>` (env var `OC_DATA_DIR`), outside the release folders. Apps are built in CI, never on the server.
 - Strapi's public content API is off. Astro calls it with a read-only API token plus header `x-oc-secret`. Draft content is never rendered on a public page.
 - Moments are stored in UTC and displayed in Africa/Lagos. The hero has 11 slides at launch: the group slide, then one per active company in `sortOrder`. It advances every 6 s.
 - Environment variables (Hostinger and `.env.example`): `DATABASE_CLIENT`, `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `APP_KEYS`, `API_TOKEN_SALT`, `ADMIN_JWT_SECRET`, `TRANSFER_TOKEN_SALT`, `JWT_SECRET`, `ENCRYPTION_KEY`, `OC_INTERNAL_SECRET`, `OC_CMS_URL`, `OC_CMS_API_TOKEN`, `OC_DATA_DIR`, `CSP_MODE` (`report-only` or `enforce`), `PUBLIC_SITE_URL`.
 
-## Prerequisites (from Slatech, before Task 3)
+## Prerequisites (from Slatech)
 
-A Hostinger Business or Cloud plan with hPanel access. A test domain with a Cloudflare account. A GitHub repository linked to the plan. A Cloudflare R2 bucket (needs a card on file). A mailbox for SMTP tests. Locally: `corepack enable` for pnpm, and Docker.
+Task 3 and the repository parts of Task 4 need only this machine (with Docker). The server steps of Task 4 need: a Hostinger VPS (KVM 2 or larger, Ubuntu 24.04 LTS, 24-month term) and an SSH key for each person who will administer it; a test domain on a Cloudflare account; a GitHub repository with the deploy secrets set (`DEPLOY_SSH_KEY`, `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS`); and a data-centre choice (spec open item O4; Slatech's pick until the DPO answers). Locally: pnpm, Docker, and Node 22.23.4 or newer.
 
 ## Review Focus
 
@@ -52,6 +52,7 @@ package.json  pnpm-workspace.yaml  tsconfig.base.json  .nvmrc  .gitignore
 docker-compose.dev.yml  playwright.config.ts  lighthouserc.json
 .github/workflows/ci.yml
 docs/phase0/report.md  docs/deploy.md
+infra/  (bootstrap.sh verify.sh lib/ systemd/ nginx/ deploy/ test/)
 packages/shared/src/  colour.ts tokens.ts initials.ts slides.ts content-types.ts index.ts (+ *.test.ts)
 apps/cms/             Strapi 5 app
   src/api/{company,home,site-setting,audit-event,staff-company-assignment}/
@@ -67,7 +68,7 @@ apps/web/             Astro app
 
 ---
 
-## Phase 0: Hostinger go/no-go
+## Phase 0: workspace and server baseline
 
 ### Task 1: Workspace, tooling and CI
 
@@ -95,40 +96,38 @@ apps/web/             Astro app
 - [ ] **Step 3:** Implement `GET` in `healthz.ts` returning `{ ok: true }`. Run the test. Expected: PASS. Also run `pnpm --filter @oc/cms develop` and confirm the admin loads at `localhost:1337/admin`.
 - [ ] **Step 4:** Commit: `feat: walking skeleton with Strapi, Astro and Playwright`.
 
-### Task 3: Phase 0A: hosting spike (items 1 to 4)
-
-Throwaway work on branch `spike/phase0`. It is **never merged**; only `docs/phase0/report.md` is copied to `main`. No tests; each step has a pass criterion that is recorded.
+### Task 3: Server setup scripts and the verifier
 
 **Files:**
-- Create (spike branch only): `apps/cms/src/api/spike/routes/spike.ts`, `apps/cms/src/api/spike/controllers/spike.ts`, `apps/web/src/pages/internal/spike-read.ts`
-- Create: `docs/phase0/report.md` (table of items 1 to 11 with result, value recorded, date)
+- Create: `infra/bootstrap.sh`, `infra/verify.sh`, `infra/server.env.example`, `infra/lib/{packages,users,ssh,firewall,services,nginx}.sh`, `infra/systemd/{oc-web@.service,oc-cms@.service,oc-cloudflare-ips.service,oc-cloudflare-ips.timer}`, `infra/nginx/oc.conf.template`, `infra/test/{Dockerfile,run.sh}`
+- Modify: `.github/workflows/ci.yml` (a new `infra` job)
 
 **Interfaces:**
-- Produces (spike endpoints, bearer `OC_INTERNAL_SECRET`): CMS `GET /internal/spike/write` writes the current ISO time to `${OC_DATA_DIR}/spike.txt`; `GET /internal/spike/read` returns it. Web `GET /internal/spike-read` reads the same file.
+- Consumes: spec §5 (layout) and §10.9 (every hardening item). Layout: system users `oc-prod` and `oc-staging`; `/var/lib/oc/<env>/{media,private,tmp}`; `/opt/oc/<env>/{releases,current}`; `/etc/oc/<env>.env`; templated units `oc-web@<env>` and `oc-cms@<env>`.
+- Produces: `infra/bootstrap.sh` (idempotent: running it twice changes nothing the second time). It reads `infra/server.env`, made from `infra/server.env.example`, which defines `OC_DOMAIN`, `OC_ADMINS` (comma-separated `user:path-to-public-key`), `OC_SSH_PORT`, `OC_TIMEZONE` (default `Africa/Lagos`) and `OC_ENVS` (default `prod staging`). `infra/verify.sh` prints `PASS <ID> <text>` or `FAIL <ID> <text>` per check, prints `SKIP <ID>` for checks marked (kernel) when `VERIFY_CONTAINER=1`, and exits non-zero if any check fails. Check IDs: SSH-01 password login off; SSH-02 root login off; SSH-03 only the named admins allowed; SSH-04 non-default port; NET-01 ufw denies inbound by default; NET-02 ports 80 and 443 open only to Cloudflare's ranges (kernel); NET-03 Nginx requires Cloudflare's client certificate; NET-04 MariaDB bound to localhost; NET-05 clamd on a local socket only; OS-01 unattended-upgrades enabled; OS-02 fail2ban sshd jail active (kernel); OS-03 time sync on (kernel); SVC-01 each unit sets `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict` and `MemoryMax`; SVC-02 secret files are `0640` and owned `root:oc-<env>`; FS-01 data folders are owned by the environment user with mode `0750`; FS-02 `/var/lib/oc` is not under any Nginx root; DB-01 one database user per environment, limited to its own database.
 
-- [ ] **Step 1: Item 1.** Push `spike/phase0`. In hPanel create two sites, `cms-staging.<domain>` and `staging.<domain>`. Link GitHub, branch `spike/phase0`, root directories `apps/cms` and `apps/web`. Deploy Astro as a detected framework and Strapi as "Other" (record the build script, start command and entry file that work). **Pass:** both build and respond. If a pnpm monorepo root directory fails, try splitting into two repositories and record the result.
-- [ ] **Step 2: Item 2.** Create a database in hPanel, set the `DATABASE_*` variables, and add the spike endpoint `GET /internal/spike/db` returning `SELECT VERSION()`. **Pass:** Strapi boots against it. Record the version string.
-- [ ] **Step 3: Item 3.** Time the Strapi admin build in the Hostinger build log. **Pass:** the build finishes and `/admin` loads. Record the duration and peak memory if shown.
-- [ ] **Step 4: Item 4.** Set `OC_DATA_DIR=/home/<user>/oc-data` on both apps. Call `/internal/spike/write`, push an empty commit, wait for the redeploy, then call `/internal/spike/read`. **Pass:** it returns the original timestamp. Also: `GET https://cms-staging.<domain>/oc-data/spike.txt` and `GET https://staging.<domain>/oc-data/spike.txt` both 404, and the web app's `/internal/spike-read` returns the same timestamp.
-- [ ] **Step 5: Gate.** Write items 1 to 4 into `docs/phase0/report.md`. **If any failed, stop and take it to Slatech**: the alternatives (a VPS, or Payload) each carry a monthly cost or a rebuild, so this isn't ours to work around.
+- [ ] **Step 1: Write the failing verifier.** Write `infra/verify.sh` with every check above, and `infra/test/{Dockerfile,run.sh}`: an Ubuntu 24.04 image without systemd that runs `bootstrap.sh` then `verify.sh` with `VERIFY_CONTAINER=1`, and a `verify-only` mode that skips the bootstrap. Run `bash infra/test/run.sh verify-only`. Expected: FAIL on every non-skipped check.
+- [ ] **Step 2: Implement the bootstrap** (libs, units, Nginx template) until every check that can run in a container passes. Run `bash infra/test/run.sh`. Expected: PASS for all non-kernel checks, SKIP for the kernel ones, exit 0. Run it twice in the same container; the second run changes nothing (verify the file hashes under `/etc` are unchanged).
+- [ ] **Step 3: Validate the artefacts.** `shellcheck` is clean on every script. `nginx -t` passes on the rendered template inside the container. `systemd-analyze verify` passes on each unit if it is available in the image; if not, say so in the report.
+- [ ] **Step 4: CI.** Add an `infra` job that builds the test image, runs `infra/test/run.sh` and `shellcheck`. Commit: `feat(infra): server bootstrap, hardening and verifier`.
 
-### Task 4: Phase 0B: edge, cron, mail, backup, load and RBAC (items 5 to 11)
+### Task 4: Deploy pipeline and the baseline run
 
 **Files:**
-- Create (spike branch): `apps/cms/src/api/spike/controllers/chunk.ts`, `scripts/spike/chunk-upload.sh`, `scripts/spike/backup-spike.ts`
-- Modify: `docs/phase0/report.md`, `docker-compose.dev.yml` and `.github/workflows/ci.yml` (DB image tag), `docs/deploy.md` (create)
+- Create: `infra/deploy/deploy-release.sh`, `infra/deploy/deploy-release.test.sh`, `.github/workflows/deploy.yml`, `docs/deploy.md`, `docs/phase0/report.md`
+- Modify: `.github/workflows/ci.yml` (add `actionlint`)
 
 **Interfaces:**
-- Produces: `docs/deploy.md` with the exact Hostinger build settings and env var table for both apps; a recorded DB version; the chosen plan size (open item O2); and a GO or NO-GO line.
+- Consumes: Task 3's layout and units.
+- Produces: `deploy-release <env> <sha>`, the SSH forced command. It reads a gzip tarball on stdin. `env` must be `prod` or `staging` and `sha` must be exactly 40 hex characters; anything else exits 2 with no side effects. It unpacks into `${OC_ROOT:-/opt/oc}/<env>/releases/<sha>`, points the `current` symlink at it, restarts `oc-cms@<env>` and `oc-web@<env>` through a sudoers entry that allows exactly those two commands, waits up to 60 s for the CMS `/_health` and the web `/healthz` on localhost, and on any failure switches `current` back to the previous release, restarts, and exits 1. It keeps the 5 newest releases. Tests override `OC_ROOT`, `OC_SYSTEMCTL` and `OC_CURL` with fakes. `deploy.yml`: a push to `staging` deploys to staging; a push to `main` runs in the GitHub environment `production`, which needs a manual approval. Both build in CI (`pnpm deploy` per app into a release directory), tar the result, and run `ssh -o StrictHostKeyChecking=yes` with `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS`.
 
-- [ ] **Step 1: Item 5, chunked upload.** Spike endpoints `PUT /internal/spike/chunk?name=<n>&index=<i>` (appends to `${OC_DATA_DIR}/tmp/<n>.part`), `POST /internal/spike/assemble?name=<n>` (returns SHA-256) and `GET /internal/spike/file/<n>` with HTTP Range. Run `scripts/spike/chunk-upload.sh`: make a 25 MB random file, `split -b 5M`, upload each chunk with `curl --limit-rate 125k --max-time 110 -X PUT --data-binary @chunk` (about 1 Mbps). **Pass:** every chunk finishes in under 110 s; the SHA-256 matches `sha256sum`; `curl -r 0-1048575` returns `206` with 1 MiB.
-- [ ] **Step 2: Item 6, cron.** In hPanel add a cron job `* * * * *` calling `POST /internal/jobs/tick` (a spike endpoint that appends a line to a log). **Pass:** after 5 minutes, at least 4 lines about 60 s apart. If one-minute isn't allowed, record the shortest interval and tell Slatech: NEW-02 ("within a minute") then needs a free external pinger.
-- [ ] **Step 3: Item 7, Cloudflare.** Proxy all four hostnames. Add Cloudflare Access applications for `cms-staging.<domain>/admin` and the whole of `staging.<domain>`. Create a Turnstile widget. **Pass:** a signed-out `curl -I` of both returns a redirect to Cloudflare Access. Also try protecting the path `/preview` on a public host and record whether it works.
-- [ ] **Step 4: Item 8, mail.** Spike endpoint sends one message through Hostinger SMTP with nodemailer. **Pass:** it arrives. Record the daily sending limit from hPanel or Hostinger's docs.
-- [ ] **Step 5: Item 9, backup.** First check `mysqldump` exists in the app environment (spike endpoint runs `which mysqldump`); if not, the dump is done in Node with streaming `mysql2` queries. Encrypt a dump with an RSA-OAEP-wrapped AES-256-GCM key, upload it to R2 through its S3-compatible API, download it, and decrypt it locally with the private key. **Pass:** the decrypted file equals the original; record which dump method works.
-- [ ] **Step 6: Item 10, load.** Run `npx autocannon -c 50 -d 60 https://staging.<domain>/healthz` and again on `/`. Watch hPanel Resource usage. **Pass:** no 503s and peak processes below 70% of the plan's NPROC. Record the peak and decide the plan size (O2).
-- [ ] **Step 7: Item 11, RBAC condition.** In a local Strapi, register a custom condition in `register()` via `strapi.service('admin::permission').conditionProvider.register({ name, displayName, handler })` that returns `{ name: { $eq: 'Company 01' } }`. Give a role "update Company" with that condition. **Pass:** through the admin REST API a user with that role gets 200 updating Company 01 and 403 on Company 02. If not, record that the per-company-roles fallback applies.
-- [ ] **Step 8: Close out.** Fill `docs/phase0/report.md` and `docs/deploy.md`. Set the `mariadb:` tag in `docker-compose.dev.yml` and `ci.yml` to the recorded major and minor version. Copy only `docs/phase0/report.md`, `docs/deploy.md` and those two config files to `main`. Add a **GO** or **NO-GO** line, and get Slatech's sign-off on it before Task 5. Commit: `docs: Phase 0 report and deploy settings`.
+- [ ] **Step 1: Write the failing tests** in `deploy-release.test.sh` (plain bash with fakes on `PATH`): `success switches current and restarts both services`; `failed health check restores the previous release and exits 1`; `bad env exits 2`; `bad sha exits 2` (including `../x`, a 39-character hex and a 41-character hex); `keeps only the 5 newest releases`; `a second deploy at the same time is refused` (use `flock`); `a deploy with no previous release and a failing health check leaves no current symlink and exits 1`. Run it. Expected: FAIL (script missing).
+- [ ] **Step 2: Implement** `deploy-release.sh`. Run the tests. Expected: all PASS; `shellcheck` clean.
+- [ ] **Step 3: Write `deploy.yml`** and add `actionlint` to CI. Expected: CI green. Do not run the workflow yet.
+- [ ] **Step 4: Local RBAC check (spec Phase 0 item 8).** In a local Strapi, register a custom condition in `register()` via `strapi.service('admin::permission').conditionProvider.register({ name, displayName, handler })` that returns `{ name: { $eq: 'Company 01' } }`. Give a role "update Company" with that condition. Through the admin REST API a user with that role gets 200 updating Company 01 and 403 on Company 02. Record PASS or FAIL and the mechanism in `docs/phase0/report.md`. If it fails, record that the per-company-roles fallback applies. Revert the spike code; commit only the report.
+- [ ] **Step 5: Commit the repository parts:** `feat(infra): deploy pipeline`.
+- [ ] **Step 6: The baseline run on the VPS (the owner, with the controller's help).** For each of spec Phase 0 items 1 to 7, do the step, record the result and any value in `docs/phase0/report.md`, with these pass criteria. (1) The VPS exists (KVM 2, Ubuntu 24.04, 24-month term) and the owner can SSH in with a key. (2) `bash infra/bootstrap.sh` then `bash infra/verify.sh` shows no FAIL; record the Lynis hardening index. (3) Record the versions of Node, MariaDB, ClamAV and Nginx; Node is at least 22.23.4. (4) Push the skeletons to the `staging` branch: the workflow deploys, `curl https://staging.<domain>/healthz` and the CMS `/_health` answer, then push a release whose health check is made to fail and confirm the previous release is serving again. (5) As the `oc-staging` user write `/var/lib/oc/staging/media/probe.txt`, deploy again, and the file is still there; `curl https://staging.<domain>/probe.txt` and `/media/../probe.txt` are 404; `clamdscan` on a file containing the EICAR test string reports `FOUND`. (6) Cloudflare proxies the hostnames; `curl -k --resolve staging.<domain>:443:<server-ip> https://staging.<domain>/` straight to the IP is refused; a signed-out request to the staging host redirects to Cloudflare Access. (7) `npx autocannon -c 50 -d 60 https://staging.<domain>/healthz`: no errors, then record `free -m`, CPU and `df -h`; if free memory is under 1 GB, record that O2 needs a larger plan.
+- [ ] **Step 7: Close out.** Fill `docs/deploy.md` (the exact commands, environment variables, secrets list, and how to roll back by hand) and add a **GO** or **NO-GO** line to the report. Items 2 and 4 failing is NO-GO: stop and take it to Slatech. Get Slatech's sign-off on the line. Commit: `docs: Phase 0 report and deploy notes`.
 
 ---
 
@@ -324,21 +323,21 @@ Throwaway work on branch `spike/phase0`. It is **never merged**; only `docs/phas
 ### Task 18: Quality gates and staging live
 
 **Files:**
-- Create: `lighthouserc.json`, `docs/deploy.md` (extend)
-- Modify: `.github/workflows/ci.yml`
+- Create: `lighthouserc.json`
+- Modify: `.github/workflows/ci.yml`, `playwright.config.ts` (skip starting local servers when `BASE_URL` points elsewhere), `docs/deploy.md` (extend)
 
 **Interfaces:**
-- Produces: CI jobs `e2e` (seeded Strapi and Astro against the CI database, Playwright with axe) and `lighthouse` (Lighthouse CI on `/`, `/group`, `/companies/<seeded slug>` with mobile emulation). Assertions: LCP at most 2500 ms, CLS at most 0.1, total compressed JavaScript at most 70 KB. A `staging` deploy runs the e2e suite against `BASE_URL=https://staging.<domain>`.
+- Produces: CI jobs `e2e` (seeded Strapi and Astro against the CI database, Playwright with axe) and `lighthouse` (Lighthouse CI on `/`, `/group`, `/companies/<seeded slug>` with mobile emulation). Assertions: LCP at most 2500 ms, CLS at most 0.1, total compressed JavaScript at most 70 KB. The Task 4 pipeline deploys staging from the `staging` branch. With `BASE_URL` set to a remote address, `pnpm e2e` runs against it and starts nothing locally.
 
-- [ ] **Step 1:** Add the two CI jobs and `lighthouserc.json`. Push a branch. Expected: both jobs run; fix any budget breach by trimming JavaScript, not by raising the budget.
-- [ ] **Step 2:** Merge to `staging`. Confirm Hostinger deploys both apps from the branch. Set `CSP_MODE=report-only` on staging. Add the 5-minute warmer cron on `https://staging.<domain>/healthz` and the one-minute tick URL. Add UptimeRobot checks for `staging.<domain>`, `cms-staging.<domain>/_health` and the tick.
-- [ ] **Step 3:** Put placeholder data on staging: run `pnpm --filter @oc/cms seed` from a machine whose IP is allowed in hPanel's Remote MySQL, or add the companies by hand in the staging admin. Then run `BASE_URL=https://staging.<domain> pnpm exec playwright test`. Expected: PASS.
+- [ ] **Step 1:** Add the two CI jobs and `lighthouserc.json`. Push a branch. Expected: both run; fix any budget breach by trimming JavaScript, not by raising the budget.
+- [ ] **Step 2:** Merge to `staging`. The Task 4 workflow deploys both apps. Confirm `CSP_MODE=report-only` in `/etc/oc/staging.env`. Add UptimeRobot checks for `staging.<domain>/healthz` and the CMS `/_health`.
+- [ ] **Step 3:** Put placeholder data on staging: run `pnpm --filter @oc/cms seed` on the server as `oc-staging`, or add the companies by hand in the staging admin. Then run `BASE_URL=https://staging.<domain> pnpm exec playwright test`. Expected: PASS.
 - [ ] **Step 4:** Record the staging URL, the CI links and any CSP reports in `docs/deploy.md`. Commit: `ci: quality gates and staging deployment`. Ask Slatech to review staging before Plan 2.
 
 ---
 
 ## Self-review notes
 
-- **Spec coverage.** Phase 0 items 1 to 11 are Tasks 3 and 4. Phase 1 (content model, roles and conditions, audit log, design system, header and footer, home, Our Group, company template, CI, staging) is Tasks 5 to 18. The spec's media store, locked API, headers and caching are Tasks 8, 9 and 11. Items deliberately left to later plans: scheduled publishing, outbox and the tick's job runner (Plan 2), forms, CRM, search, consent (Plan 2), the file pipeline and portals (Plan 3), backups job and hardening (Plan 4). The project case-study prototype board is a design task for Slatech in week 1, not code.
+- **Spec coverage.** Phase 0 items 1 to 8 are Tasks 3 and 4 (items 7 and 8 of the old list, email and backup, move to Plans 2 and 4, and the throttled upload to Plan 3, because they need code that doesn't exist yet). Phase 1 (content model, roles and conditions, audit log, design system, header and footer, home, Our Group, company template, CI, staging) is Tasks 5 to 18. The spec's media store, locked API, headers and caching are Tasks 8, 9 and 11. Left to later plans: scheduled publishing and the job runner, forms, CRM, search, consent (Plan 2); the file pipeline and portals (Plan 3); the backup job and hardening (Plan 4). The project case-study prototype board is a design task for Slatech in week 1, not code.
 - **Type consistency.** `deriveAccent`, `InvalidColourError`, `CmsUnavailableError`, `getCompanies`, `getCompany`, `getHome`, `getSiteSettings`, `buildSlides`, `initials`, `AuditInput`, `audit.record`, `ensureRoles` and the env var names are used identically wherever they appear.
 - **Open dependency.** Q4 (developer count and launch date) isn't answered. It decides whether Tasks 12 to 15 run in parallel with Tasks 16 and 17 (they touch different apps and files, so they can).
