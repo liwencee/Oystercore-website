@@ -62,3 +62,22 @@ jobs:
         run: >-
           docker run --rm -v "$GITHUB_WORKSPACE:/repo"
           ghcr.io/gitleaks/gitleaks:v8.30.1 git --verbose --redact /repo
+
+  # The server setup scripts, proved in a throwaway Ubuntu 24.04 container: shellcheck,
+  # then bootstrap twice, verify, and check the second run changed nothing. It installs the
+  # real packages (MariaDB 11.4, Nginx, ClamAV, Podman), so it needs the internet and takes
+  # several minutes. No secret is involved: the test generates its own keys and settings.
+  infra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the test image
+        run: docker build --tag oc-infra-test:local --file infra/test/Dockerfile infra
+
+      - name: shellcheck
+        run: bash infra/test/run.sh shellcheck
+
+      - name: Bootstrap, verify and idempotence
+        run: bash infra/test/run.sh
