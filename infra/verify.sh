@@ -76,44 +76,105 @@ load_facts() {
 
 sshd_val() { awk -v k="$1" '$1 == k {$1 = ""; sub(/^ /, ""); v = (v == "" ? $0 : v " " $0)} END {print v}' <<<"$SSHD_T"; }
 
-# nginx_servers: one line per server block of `nginx -T`:
-#   names|ssl|default|reject|verify_client|client_certificate|ssl_protocols
+# nginx_servers: reads `nginx -T` and prints one line per server block, then one summary line:
+#   S|names|ssl|default|reject|verify_client|client_certificate|ssl_protocols
+#   T|ssl_listens_in_servers|listens_outside_servers|ssl_listens_outside_servers|unbalanced
+# It tokenises the text the way Nginx does (words, quotes, ; { }), so a server block counts
+# however it is laid out: "server {" alone on a line, the whole block on one line, or the
+# "{" on the next line. A server is TLS if a listen has ssl or quic, or it says "ssl on".
 # Only directives written directly in the server block count, not those in locations.
-nginx_servers() {
-  awk '
-    {
-      line = $0
-      sub(/[ \t]*#.*$/, "", line)
-      if (!in_server && line ~ /^[ \t]*server[ \t]*\{[ \t]*$/) {
-        in_server = 1; sdepth = depth + 1; depth++
-        names = ""; ssl = 0; def = 0; rej = 0; ver = ""; cc = ""; proto = ""
-        next
-      }
-      o = gsub(/\{/, "{", line); c = gsub(/\}/, "}", line)
-      if (in_server && depth == sdepth) {
-        if (line ~ /^[ \t]*listen[ \t]/) {
-          if (line ~ /[ \t]ssl([ \t;]|$)/) ssl = 1
-          if (line ~ /default_server/) def = 1
-        } else if (line ~ /^[ \t]*server_name[ \t]/) {
-          t = line; sub(/^[ \t]*server_name[ \t]+/, "", t); sub(/[ \t]*;.*$/, "", t); names = t
-        } else if (line ~ /^[ \t]*ssl_reject_handshake[ \t]+on[ \t]*;/) {
-          rej = 1
-        } else if (line ~ /^[ \t]*ssl_verify_client[ \t]/) {
-          t = line; sub(/^[ \t]*ssl_verify_client[ \t]+/, "", t); sub(/[ \t]*;.*$/, "", t); ver = t
-        } else if (line ~ /^[ \t]*ssl_client_certificate[ \t]/) {
-          t = line; sub(/^[ \t]*ssl_client_certificate[ \t]+/, "", t); sub(/[ \t]*;.*$/, "", t); cc = t
-        } else if (line ~ /^[ \t]*ssl_protocols[ \t]/) {
-          t = line; sub(/^[ \t]*ssl_protocols[ \t]+/, "", t); sub(/[ \t]*;.*$/, "", t); proto = t
-        }
-      }
-      depth += o - c
-      if (in_server && depth < sdepth) {
-        print names "|" ssl "|" def "|" rej "|" ver "|" cc "|" proto
-        in_server = 0
-      }
-    }
-  '
+NGINX_AWK=""
+read -r -d '' NGINX_AWK <<'AWK' || true
+function endword() {
+  if (haveword) { w[nw++] = word }
+  word = ""; haveword = 0
 }
+function join(from,   i, r) {
+  r = ""
+  for (i = from; i < nw; i++) r = (r == "" ? w[i] : r " " w[i])
+  return r
+}
+function directive(   name, i, has_ssl, has_def) {
+  if (nw == 0) return
+  name = w[0]
+  if (name == "listen") {
+    has_ssl = 0; has_def = 0
+    for (i = 1; i < nw; i++) {
+      if (w[i] == "ssl" || w[i] == "quic") has_ssl = 1
+      if (w[i] == "default_server") has_def = 1
+    }
+    if (srv > 0) {
+      if (has_ssl) { s_ssl = 1; srv_ssl_listens++ }
+      if (has_def) s_def = 1
+    } else {
+      orphan++
+      if (has_ssl) orphan_ssl++
+    }
+    return
+  }
+  if (srv > 0 && depth == srv) {
+    if (name == "server_name") s_names = (s_names == "" ? join(1) : s_names " " join(1))
+    else if (name == "ssl_reject_handshake") { if (w[1] == "on") s_rej = 1 }
+    else if (name == "ssl_verify_client") s_ver = w[1]
+    else if (name == "ssl_client_certificate") s_cc = w[1]
+    else if (name == "ssl_protocols") s_proto = join(1)
+    else if (name == "ssl") { if (w[1] == "on") s_ssl = 1 }
+  }
+}
+function open_block() {
+  depth++
+  if (srv == 0 && nw == 1 && w[0] == "server") {
+    srv = depth
+    s_names = ""; s_ssl = 0; s_def = 0; s_rej = 0; s_ver = ""; s_cc = ""; s_proto = ""
+  }
+}
+function close_block() {
+  if (depth <= 0) { unbalanced = 1; return }
+  if (srv > 0 && depth == srv) {
+    print "S|" s_names "|" s_ssl "|" s_def "|" s_rej "|" s_ver "|" s_cc "|" s_proto
+    srv = 0
+  }
+  depth--
+}
+function stmt_end(kind) {
+  endword()
+  if (kind == ";") directive()
+  else if (kind == "{") open_block()
+  else close_block()
+  nw = 0
+}
+{
+  n = length($0)
+  for (i = 1; i <= n; i++) {
+    c = substr($0, i, 1)
+    if (inq != "") {
+      if (c == "\\") { word = word c substr($0, i + 1, 1); i++; continue }
+      if (c == inq) { inq = ""; continue }
+      word = word c
+      continue
+    }
+    if (c == "#" && !haveword) break
+    if (c == "'" || c == "\"") { inq = c; haveword = 1; continue }
+    if (c == "$" && substr($0, i + 1, 1) == "{") {
+      j = index(substr($0, i), "}")
+      if (j > 0) { word = word substr($0, i, j); haveword = 1; i += j - 1; continue }
+    }
+    if (c == "\\") { word = word c substr($0, i + 1, 1); haveword = 1; i++; continue }
+    if (c == " " || c == "\t" || c == "\r") { endword(); continue }
+    if (c == ";") { stmt_end(";"); continue }
+    if (c == "{") { stmt_end("{"); continue }
+    if (c == "}") { stmt_end("}"); continue }
+    word = word c
+    haveword = 1
+  }
+  if (inq == "") endword()
+}
+END {
+  if (depth != 0 || inq != "") unbalanced = 1
+  print "T|" (srv_ssl_listens + 0) "|" (orphan + 0) "|" (orphan_ssl + 0) "|" (unbalanced + 0)
+}
+AWK
+nginx_servers() { awk "$NGINX_AWK"; }
 
 # --- SSH ---------------------------------------------------------------------------
 need_sshd() {
@@ -280,21 +341,46 @@ check_net_02() {
   pass "ports 80 and 443 are open only to the $n Cloudflare ranges; SSH is the only other open port"
 }
 
+# nginx_tls_problems: what the parsed Nginx configuration says is wrong with TLS handling.
+# Prints one problem per line (nothing if all is well), and the TLS server count as the last
+# line "COUNT n". Shared by NET-03 and NGX-01.
+nginx_parse_summary() {
+  # Sets: NS_UNBALANCED NS_ORPHAN_SSL NS_PARSED_SSL, from the T| line.
+  local t
+  t=$(grep '^T|' <<<"$NGINX_SERVERS" | head -n 1)
+  IFS='|' read -r _ NS_PARSED_SSL _ NS_ORPHAN_SSL NS_UNBALANCED <<<"$t"
+}
+
 check_net_03() {
-  local line names ssl rej ver cc proto n=0 bad=""
+  local line type names ssl rej ver cc proto n=0 bad="" name tested=0 code indep
+  local NS_PARSED_SSL=0 NS_ORPHAN_SSL=0 NS_UNBALANCED=0
   if [[ -z $NGINX_SERVERS ]]; then
     fail "cannot read the Nginx configuration (is nginx installed and does nginx -T pass?)"
     return 0
   fi
-  while IFS='|' read -r names ssl _ rej ver cc proto; do
-    [[ $ssl == 1 && $rej == 0 ]] || continue
+  nginx_parse_summary
+  if [[ ${NS_UNBALANCED:-1} != 0 ]]; then
+    fail "the Nginx configuration could not be read reliably (unbalanced braces or quotes), so TLS cannot be vouched for"
+    return 0
+  fi
+  [[ ${NS_ORPHAN_SSL:-0} == 0 ]] || bad+=" [${NS_ORPHAN_SSL} TLS listen directive(s) outside any server block]"
+  # A second, independent count of the "listen ... ssl" statements in the text. The parser
+  # and this count must agree, so a layout the parser does not understand cannot hide a site.
+  indep=$(printf '%s\n' "$NGINX_T" | sed 's/[[:space:]]*#.*$//' |
+    grep -oE '(^|[;{}[:space:]])listen[[:space:]][^;]*;' |
+    grep -cE '[[:space:]](ssl|quic)([[:space:];]|$)' || true)
+  if [[ $indep -ne $((NS_PARSED_SSL + NS_ORPHAN_SSL)) ]]; then
+    bad+=" [the configuration has $indep TLS listen statements but the parser accounted for $((NS_PARSED_SSL + NS_ORPHAN_SSL))]"
+  fi
+  while IFS='|' read -r type names ssl _ rej ver cc proto; do
+    [[ $type == S && $ssl == 1 && $rej == 0 ]] || continue
     n=$((n + 1))
     if [[ $ver != on ]]; then
-      bad+=" [$names: ssl_verify_client '$ver']"
+      bad+=" [${names:-unnamed server}: ssl_verify_client '$ver']"
     elif [[ -z $cc || ! -f $cc ]]; then
-      bad+=" [$names: client certificate file missing]"
+      bad+=" [${names:-unnamed server}: client certificate file missing]"
     elif ! cmp -s -- "$cc" "$OC_INFRA_DIR/nginx/cloudflare-origin-pull-ca.pem"; then
-      bad+=" [$names: client CA differs from infra/nginx/cloudflare-origin-pull-ca.pem]"
+      bad+=" [${names:-unnamed server}: client CA differs from infra/nginx/cloudflare-origin-pull-ca.pem]"
     fi
   done <<<"$NGINX_SERVERS"
   if ((n == 0)); then
@@ -309,29 +395,40 @@ check_net_03() {
     pass "all $n TLS sites require Cloudflare's client certificate (configuration)"
     return 0
   fi
-  line=$(echo "$NGINX_SERVERS" | awk -F'|' '$2 == 1 && $4 == 0 {split($1, a, " "); print a[1]; exit}')
   if ! systemctl is-active --quiet nginx; then
     fail "nginx is not running"
     return 0
   fi
-  if [[ $(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' --resolve "$line:443:127.0.0.1" "https://$line/" 2>/dev/null) != 400 ]]; then
-    fail "a request without a client certificate to $line was not refused"
-    return 0
+  # Live: every host name of every TLS site must refuse a request without the certificate.
+  while IFS='|' read -r type names ssl _ rej _ _ _; do
+    [[ $type == S && $ssl == 1 && $rej == 0 ]] || continue
+    for name in $names; do
+      [[ $name =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || continue
+      tested=$((tested + 1))
+      code=$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' --resolve "$name:443:127.0.0.1" "https://$name/" 2>/dev/null)
+      [[ $code == 400 ]] || bad+=" [$name answered $code to a request without a client certificate]"
+    done
+  done <<<"$NGINX_SERVERS"
+  if ((tested == 0)); then
+    fail "no TLS host name could be tested live"
+  elif [[ -n $bad ]]; then
+    fail "a request without Cloudflare's client certificate was not refused:$bad"
+  else
+    pass "all $n TLS sites require Cloudflare's client certificate; a request without one is refused on all $tested host names"
   fi
-  pass "all $n TLS sites require Cloudflare's client certificate; a request without one is refused"
 }
 
 check_ngx_01() {
-  local names ssl rej ver cc proto p bad=""
+  local type names ssl rej ver cc proto p bad=""
   if [[ -z $NGINX_SERVERS ]]; then
     fail "cannot read the Nginx configuration"
     return 0
   fi
-  while IFS='|' read -r names ssl _ rej ver cc proto; do
-    [[ $ssl == 1 ]] || continue
-    [[ -n $proto ]] || bad+=" [$names: no ssl_protocols]"
+  while IFS='|' read -r type names ssl _ rej ver cc proto; do
+    [[ $type == S && $ssl == 1 ]] || continue
+    [[ -n $proto ]] || bad+=" [${names:-unnamed server}: no ssl_protocols]"
     for p in $proto; do
-      [[ $p == TLSv1.2 || $p == TLSv1.3 ]] || bad+=" [$names: allows $p]"
+      [[ $p == TLSv1.2 || $p == TLSv1.3 ]] || bad+=" [${names:-unnamed server}: allows $p]"
     done
   done <<<"$NGINX_SERVERS"
   grep -Eq '^[[:space:]]*server_tokens[[:space:]]+off;' <<<"$NGINX_T" || bad+=" [server_tokens is not off]"
@@ -578,83 +675,329 @@ check_os_08() {
 
 # --- services and files ------------------------------------------------------------
 # --- containers (rootless Podman, Quadlet) -----------------------------------------
-# qvals FILE KEY: every value of KEY= in a Quadlet file (comment lines are not read).
-qvals() { awk -v k="$2" 'index($0, k "=") == 1 {print substr($0, length(k) + 2)}' "$1"; }
+# These Quadlet files belong to the same user the containers run as, so they are exactly what
+# a compromised app would try to change. Everything below is therefore an ALLOW-list: a
+# section, key, mount, flag or environment name that is not named here fails the check.
+# When a template legitimately gains a line, this is the one place to add it.
 
-# q_check_container FILE ENV ROLE: print one problem per line for a Quadlet container file.
+# qnorm FILE: a Quadlet (systemd-style) file as "section US key US value" records (US is the
+# character 0x1f). It reads the syntax the way systemd does, so tampering cannot hide in a
+# spelling the checks do not expect: spaces around the key and the =, lines joined by a
+# trailing backslash, comment lines (# and ;) skipped. A line that is not a section, a comment
+# or key=value gets an empty key, which the checks reject.
+qnorm() {
+  awk '
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+    function emit(line,   t, eq) {
+      t = trim(line)
+      if (t == "" || t ~ /^[#;]/) return
+      if (t ~ /^\[.*\]$/) { section = substr(t, 2, length(t) - 2); return }
+      eq = index(t, "=")
+      if (eq == 0) { print section "\037\037" t; return }
+      print section "\037" trim(substr(t, 1, eq - 1)) "\037" trim(substr(t, eq + 1))
+    }
+    {
+      line = $0; sub(/\r$/, "", line)
+      if (pending != "") { line = pending " " line; pending = "" }
+      if (line ~ /\\$/) { sub(/\\$/, "", line); pending = line; next }
+      emit(line)
+    }
+    END { if (pending != "") emit(pending) }
+  ' "$1"
+}
+
+Q_US=$'\037'
+
+# q_allowed_keys SECTION: the keys a file may use in that section (fails for an unknown section).
+q_allowed_keys() {
+  case $1 in
+    Unit) echo "Description" ;;
+    Container) echo "ContainerName Image UserNS User Group ReadOnly DropCapability NoNewPrivileges Tmpfs PidsLimit PodmanArgs Environment EnvironmentFile Network PublishPort Volume HealthCmd HealthInterval HealthTimeout HealthRetries HealthStartPeriod" ;;
+    Service) echo "Restart RestartSec TimeoutStartSec TimeoutStopSec" ;;
+    Install) echo "WantedBy" ;;
+    *) return 1 ;;
+  esac
+}
+
+# q_env_problem ROLE NAME VALUE: why an environment variable may not be set by a Quadlet file.
+q_env_problem() {
+  local role=$1 name=$2 value=$3 allowed
+  if [[ $role == cms ]]; then
+    allowed="NODE_OPTIONS HOST PORT DATABASE_SOCKET_PATH OC_CLAMD_SOCKET"
+  else
+    allowed="NODE_OPTIONS HOST PORT OC_CMS_URL"
+  fi
+  word_in "$allowed" "$name" || {
+    echo "environment variable $name is not allowed"
+    return 0
+  }
+  if [[ $name == NODE_OPTIONS && ! $value =~ ^--max-old-space-size=[0-9]+$ ]]; then
+    echo "NODE_OPTIONS may only set --max-old-space-size"
+  fi
+}
+
+# q_expected_volumes ENV ROLE: the mounts a container may have, one per line (src:dst[:ro]).
+q_expected_volumes() {
+  local env=$1 role=$2
+  if [[ $role == cms ]]; then
+    printf '%s\n' "$OC_DATA_ROOT/$env:$OC_DATA_ROOT/$env" \
+      "$OC_MARIADB_RUN_DIR:$OC_MARIADB_RUN_DIR:ro" "$OC_CLAMD_RUN_DIR:$OC_CLAMD_RUN_DIR:ro"
+  else
+    printf '%s\n' "$OC_DATA_ROOT/$env/media:$OC_DATA_ROOT/$env/media:ro"
+  fi
+}
+
+# q_env_file ENV ROLE: the one environment file a container may use.
+q_env_file() {
+  if [[ $2 == web ]]; then
+    printf '%s/%s.web.env' "$OC_SECRET_DIR" "$1"
+  else
+    printf '%s/%s.env' "$OC_SECRET_DIR" "$1"
+  fi
+}
+
+# q_check_container FILE ENV ROLE: one problem per line for a Quadlet container file.
 q_check_container() {
-  local f=$1 env=$2 role=$3 uid gid v n src dst opt arg bad
+  local f=$1 env=$2 role=$3 qn uid gid sec key val allowed n v arg expected host_port internal got
+  qn=$(qnorm "$f")
   uid=$(oc_env_uid "$env")
   gid=$(oc_env_gid "$env")
   [[ -n $uid && -n $gid ]] || {
     echo "user oc-$env does not exist"
     return 0
   }
-  [[ $(qvals "$f" UserNS) == keep-id ]] || echo "UserNS is not keep-id"
-  [[ $(qvals "$f" User) == "$uid" && $uid -ne 0 ]] || echo "User is not the environment user's id ($uid), or is root"
-  [[ $(qvals "$f" Group) == "$gid" && $gid -ne 0 ]] || echo "Group is not the environment user's group ($gid), or is root"
-  [[ $(qvals "$f" ReadOnly) == true ]] || echo "ReadOnly is not true"
-  [[ $(qvals "$f" DropCapability) == ALL ]] || echo "DropCapability is not ALL"
-  [[ $(qvals "$f" NoNewPrivileges) == true ]] || echo "NoNewPrivileges is not true"
-  [[ $(qvals "$f" Tmpfs | head -n 1) == /tmp* ]] || echo "no Tmpfs for /tmp"
-  v=$(qvals "$f" PidsLimit)
-  [[ $v =~ ^[1-9][0-9]*$ ]] || echo "no PidsLimit (a positive number)"
-  if ! qvals "$f" PodmanArgs | grep -Eq -- '(^|[[:space:]])--memory=[1-9][0-9]*[kmgKMG]?([[:space:]]|$)' &&
-    ! qvals "$f" Memory | grep -Eq '^[1-9][0-9]*[kmgKMG]?$'; then
-    echo "no memory limit"
+  if [[ $role == cms ]]; then
+    host_port=$(oc_cms_port "$env")
+    internal=$OC_CMS_INTERNAL_PORT
+  else
+    host_port=$(oc_web_port "$env")
+    internal=$OC_WEB_INTERNAL_PORT
   fi
-  [[ $(qvals "$f" EnvironmentFile) == "$OC_SECRET_DIR/$env.env" ]] || echo "EnvironmentFile is not $OC_SECRET_DIR/$env.env"
-  n=$(qvals "$f" Image | grep -c . || true)
-  [[ $n -eq 1 ]] || echo "$n Image= lines (exactly one is needed)"
-  qvals "$f" HealthCmd | grep -q '/app/healthcheck.mjs' || echo "no health check using /app/healthcheck.mjs"
-  [[ $(qvals "$f" Network) == "oc-$env.network" ]] || echo "Network is not oc-$env.network (the private network)"
+  qget() { awk -F"$Q_US" -v s="$1" -v k="$2" '$1 == s && $2 == k {print $3}' <<<"$qn"; }
+  qcount() { awk -F"$Q_US" -v s="$1" -v k="$2" '$1 == s && $2 == k {n++} END {print n + 0}' <<<"$qn"; }
+
+  # 1. Only known sections and keys.
+  while IFS="$Q_US" read -r sec key val; do
+    [[ -n $sec$key$val ]] || continue
+    if [[ -z $key ]]; then
+      echo "a line that is not Key=value: '${val:0:50}'"
+      continue
+    fi
+    if ! allowed=$(q_allowed_keys "$sec"); then
+      echo "section [$sec] is not allowed"
+      continue
+    fi
+    word_in "$allowed" "$key" || echo "key $key in [$sec] is not allowed"
+  done <<<"$qn"
+
+  # 2. Keys that must appear exactly once, with exactly the right value.
+  for key in ContainerName Image UserNS User Group ReadOnly DropCapability NoNewPrivileges PidsLimit EnvironmentFile Network Tmpfs HealthCmd PublishPort; do
+    n=$(qcount Container "$key")
+    [[ $n -eq 1 ]] || echo "$key appears $n times (exactly one is needed)"
+  done
+  [[ $(qget Container ContainerName) == "oc-$role-$env" ]] || echo "ContainerName is not oc-$role-$env"
+  [[ $(qget Container UserNS) == keep-id ]] || echo "UserNS is not keep-id"
+  v=$(qget Container User)
+  [[ $v == "$uid" && $uid -ne 0 ]] || echo "User is not the environment user's id ($uid), or is root"
+  v=$(qget Container Group)
+  [[ $v == "$gid" && $gid -ne 0 ]] || echo "Group is not the environment user's group ($gid), or is root"
+  [[ $(qget Container ReadOnly) == true ]] || echo "ReadOnly is not true"
+  [[ $(qget Container DropCapability) == ALL ]] || echo "DropCapability is not ALL"
+  [[ $(qget Container NoNewPrivileges) == true ]] || echo "NoNewPrivileges is not true"
+  [[ $(qget Container PidsLimit) =~ ^[1-9][0-9]*$ ]] || echo "no PidsLimit (a positive number)"
+  [[ $(qget Container Tmpfs) == /tmp* ]] || echo "Tmpfs is not for /tmp"
+  expected=$(q_env_file "$env" "$role")
+  [[ $(qget Container EnvironmentFile) == "$expected" ]] || echo "EnvironmentFile is not $expected"
+  [[ $(qget Container Network) == "oc-$env.network" ]] || echo "Network is not oc-$env.network (the private network)"
+  [[ $(qget Container PublishPort) == "127.0.0.1:$host_port:$internal" ]] || echo "PublishPort is not exactly 127.0.0.1:$host_port:$internal"
+  [[ $(qget Container Image) =~ ^localhost/oc-(cms|web)(:[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$ ]] || echo "Image is not a local oc-cms or oc-web image"
+  [[ $(qget Container HealthCmd) == '["/nodejs/bin/node","/app/healthcheck.mjs"]' ]] || echo "HealthCmd is not the /app/healthcheck.mjs check"
+
+  # 3. Mounts: exactly the expected ones.
+  expected=$(q_expected_volumes "$env" "$role")
+  got=$(qget Container Volume)
+  while IFS= read -r v; do
+    [[ -n $v ]] || continue
+    [[ $'\n'$expected$'\n' == *$'\n'"$v"$'\n'* ]] || echo "Volume '$v' is not allowed"
+  done <<<"$got"
+  while IFS= read -r v; do
+    [[ -n $v ]] || continue
+    [[ $'\n'$got$'\n' == *$'\n'"$v"$'\n'* ]] || echo "the expected Volume '$v' is missing"
+  done <<<"$expected"
+
+  # 4. Environment variables, and extra podman arguments: names and flags on an allow-list.
+  while IFS= read -r v; do
+    [[ -n $v ]] || continue
+    if [[ $v != *=* ]]; then
+      echo "Environment '$v' is not NAME=value"
+      continue
+    fi
+    q_env_problem "$role" "${v%%=*}" "${v#*=}"
+  done < <(qget Container Environment)
   n=0
   while IFS= read -r v; do
     [[ -n $v ]] || continue
-    n=$((n + 1))
-    [[ $v == 127.0.0.1:* ]] || echo "PublishPort '$v' is not on 127.0.0.1 only"
-  done < <(qvals "$f" PublishPort)
-  [[ $n -ge 1 ]] || echo "no PublishPort (the app would not be reachable by Nginx)"
-  # Mounts: the environment's own data folder, and (CMS only) the MariaDB and ClamAV socket
-  # folders read-only. Nothing else, and never a container socket.
-  while IFS= read -r v; do
-    [[ -n $v ]] || continue
-    IFS=: read -r src dst opt <<<"$v"
-    case $src in
-      "$OC_DATA_ROOT/$env" | "$OC_DATA_ROOT/$env"/media | "$OC_DATA_ROOT/$env"/media/) ;;
-      "$OC_MARIADB_RUN_DIR" | "$OC_CLAMD_RUN_DIR")
-        [[ $role == cms ]] || echo "the website must not mount $src"
-        [[ $opt == ro ]] || echo "$src must be mounted read-only"
-        ;;
-      *) echo "Volume source '$src' is not allowed" ;;
-    esac
-    [[ $dst == "$src" ]] || echo "Volume $src is mounted at a different path ($dst)"
-  done < <(qvals "$f" Volume)
-  if [[ $role == web ]]; then
-    qvals "$f" Volume | grep -q "^$OC_DATA_ROOT/$env:" && echo "the website mounts the whole data folder; it needs only media, read-only"
-  fi
-  # No other way to widen the sandbox.
-  for arg in AddCapability AddDevice Mount SecurityLabelDisable SecurityLabelType Rootfs Pod; do
-    [[ -z $(qvals "$f" "$arg") ]] || echo "$arg is set"
-  done
-  while IFS= read -r v; do
     for arg in $v; do
       case $arg in
-        --memory=* | --memory-swap=*) ;;
+        --memory=[1-9]*) n=$((n + 1)) ;;
+        --memory-swap=[1-9]*) ;;
         --group-add=keep-groups) [[ $role == cms ]] || echo "the website must not keep the host's groups" ;;
         *) echo "PodmanArgs has '$arg', which is not on the allow-list" ;;
       esac
     done
-  done < <(qvals "$f" PodmanArgs)
-  bad=$(qvals "$f" Network | grep -c -- 'host' || true)
-  [[ $bad -eq 0 ]] || echo "host networking"
+  done < <(qget Container PodmanArgs)
+  [[ $n -eq 1 ]] || echo "no memory limit (PodmanArgs=--memory=...)"
+
+  # 5. The other sections.
+  [[ $(qget Install WantedBy) == default.target ]] || echo "WantedBy is not default.target"
+  while IFS="$Q_US" read -r sec key val; do
+    [[ $sec == Service ]] || continue
+    case $key in
+      Restart) [[ $val == on-failure ]] || echo "Restart is not on-failure" ;;
+      *) [[ $val =~ ^[0-9]+$ ]] || echo "$key is not a number of seconds" ;;
+    esac
+  done <<<"$qn"
+}
+
+# q_check_generated ENV ROLE LINE: one problem per line for the ExecStart= line of the podman
+# run command that Podman's Quadlet generator produced. This is what would really run, so it
+# is checked flag by flag: only the flags the templates produce are allowed, each with only
+# its expected values. --privileged, --cap-add, --network=host, unconfined profiles, extra
+# mounts, devices and namespaces all fall outside that.
+q_check_generated() {
+  local env=$1 role=$2 line=$3 uid gid i t flag val hasval seen_image=0 hp ip v name
+  local -a tok=() missing=()
+  local -A seen=() vols=()
+  uid=$(oc_env_uid "$env")
+  gid=$(oc_env_gid "$env")
+  if [[ $role == cms ]]; then
+    hp=$(oc_cms_port "$env")
+    ip=$OC_CMS_INTERNAL_PORT
+  else
+    hp=$(oc_web_port "$env")
+    ip=$OC_WEB_INTERNAL_PORT
+  fi
+  read -r -a tok <<<"${line#ExecStart=}"
+  if [[ ${tok[0]:-} != /usr/bin/podman || ${tok[1]:-} != run ]]; then
+    echo "the generated command is not /usr/bin/podman run"
+    return 0
+  fi
+  i=2
+  while ((i < ${#tok[@]})); do
+    t=${tok[$i]}
+    i=$((i + 1))
+    if [[ $t != -* ]]; then
+      if ((seen_image)); then
+        echo "an extra argument after the image: '${t:0:40}'"
+      else
+        seen_image=1
+        [[ $t =~ ^localhost/oc-(cms|web)(:[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$ ]] || echo "the image '${t:0:60}' is not a local oc-cms or oc-web image"
+      fi
+      continue
+    fi
+    flag=$t
+    val=""
+    hasval=0
+    if [[ $t == --*=* ]]; then
+      flag=${t%%=*}
+      val=${t#*=}
+      hasval=1
+    fi
+    case $flag in
+      --replace | --rm | -d | --read-only)
+        seen[$flag]=1
+        continue
+        ;;
+      --name | --cidfile | --cgroups | --network | --sdnotify | --security-opt | --pids-limit | --cap-drop | --user | --userns | --tmpfs | -v | --publish | --env | --env-file | --health-cmd | --health-interval | --health-retries | --health-start-period | --health-timeout | --group-add | --memory | --memory-swap)
+        if ((!hasval)); then
+          val=${tok[$i]:-}
+          i=$((i + 1))
+        fi
+        ;;
+      *)
+        echo "the generated command has the flag '$flag', which is not allowed"
+        continue
+        ;;
+    esac
+    seen[$flag]=1
+    case $flag in
+      --name) [[ $val == "oc-$role-$env" ]] || echo "--name is not oc-$role-$env" ;;
+      --network) [[ $val == "oc-$env" ]] || echo "--network is '$val', not the private network oc-$env" ;;
+      --security-opt) [[ $val == no-new-privileges ]] || echo "--security-opt '$val' is not allowed (only no-new-privileges)" ;;
+      --cap-drop) [[ $val == all ]] || echo "--cap-drop is '$val', not all" ;;
+      --userns) [[ $val == keep-id ]] || echo "--userns is '$val', not keep-id" ;;
+      --user) [[ $val == "$uid:$gid" ]] || echo "--user is '$val', not $uid:$gid" ;;
+      --pids-limit) [[ $val =~ ^[1-9][0-9]*$ ]] || echo "--pids-limit '$val' is not a positive number" ;;
+      --memory | --memory-swap) [[ $val =~ ^[1-9][0-9]*[kKmMgG]?$ ]] || echo "$flag '$val' is not a size" ;;
+      --tmpfs) [[ $val == /tmp* ]] || echo "--tmpfs '$val' is not for /tmp" ;;
+      --publish) [[ $val == "127.0.0.1:$hp:$ip" ]] || echo "--publish '$val' is not exactly 127.0.0.1:$hp:$ip" ;;
+      --env-file) [[ $val == "$(q_env_file "$env" "$role")" ]] || echo "--env-file is '$val', not $(q_env_file "$env" "$role")" ;;
+      --group-add) [[ $val == keep-groups && $role == cms ]] || echo "--group-add '$val' is not allowed here" ;;
+      --health-cmd)
+        v=${val//[\\\"]/}
+        [[ $v == '[/nodejs/bin/node,/app/healthcheck.mjs]' ]] || echo "--health-cmd is not the /app/healthcheck.mjs check"
+        ;;
+      --env)
+        name=${val%%=*}
+        q_env_problem "$role" "$name" "${val#*=}"
+        ;;
+      -v)
+        vols[$val]=1
+        [[ $'\n'$(q_expected_volumes "$env" "$role")$'\n' == *$'\n'"$val"$'\n'* ]] || echo "the mount '$val' is not allowed"
+        ;;
+      *) ;;
+    esac
+  done
+  ((seen_image)) || echo "the generated command has no image"
+  for flag in --read-only --cap-drop --security-opt --userns --user --pids-limit --memory --publish --network --env-file --tmpfs --health-cmd; do
+    [[ -n ${seen[$flag]:-} ]] || missing+=("$flag")
+  done
+  [[ ${#missing[@]} -eq 0 ]] || echo "the generated command lacks: ${missing[*]}"
+  while IFS= read -r v; do
+    [[ -n $v ]] || continue
+    [[ -n ${vols[$v]:-} ]] || echo "the generated command lacks the mount '$v'"
+  done < <(q_expected_volumes "$env" "$role")
+}
+
+# q_check_dir ENV: the Quadlet folder holds exactly the three files, as plain files. A drop-in
+# folder (oc-web-prod.container.d/), a second container file or anything else is a way to
+# change what runs, so it fails. In a running system the user's runtime Quadlet folder must
+# be empty too.
+q_check_dir() {
+  local env=$1 qdir name uid rdir sec key val
+  local -a want=()
+  qdir=$(oc_env_quadlet_dir "$env")
+  want=("oc-$env.network" "oc-cms-$env.container" "oc-web-$env.container")
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    word_in "${want[*]}" "$name" || echo "unexpected entry '$name' in $qdir"
+  done < <(find "$qdir" -mindepth 1 -printf '%P\n' 2>/dev/null)
+  find "$qdir" -mindepth 1 ! -type f -printf '%P is not a plain file\n' 2>/dev/null
+  # The network file: only its name.
+  while IFS="$Q_US" read -r sec key val; do
+    [[ -n $sec$key$val ]] || continue
+    [[ $sec == Network && $key == NetworkName && $val == "oc-$env" ]] || echo "oc-$env.network has '${sec}/${key}', which is not allowed"
+  done < <(qnorm "$qdir/oc-$env.network" 2>/dev/null)
+  if ! in_container; then
+    uid=$(oc_env_uid "$env")
+    rdir=/run/user/$uid/containers/systemd
+    if [[ -d $rdir && -n $(find "$rdir" -mindepth 1 -print -quit 2>/dev/null) ]]; then
+      echo "the runtime Quadlet folder $rdir is not empty"
+    fi
+  fi
 }
 
 check_ctr_01() {
-  local env role f qdir p bad="" n=0 gen flags problems
+  local env role f qdir p bad="" n=0 gen line rc problems ex
   for env in "${OC_ENV_LIST[@]}"; do
     qdir=$(oc_env_quadlet_dir "$env")
-    [[ -f $qdir/oc-$env.network ]] || bad+=" [$qdir/oc-$env.network missing]"
+    if [[ ! -d $qdir ]]; then
+      bad+=" [$qdir missing]"
+      continue
+    fi
+    while IFS= read -r p; do
+      [[ -n $p ]] && bad+=" [oc-$env: $p]"
+    done < <(q_check_dir "$env")
     for role in cms web; do
       f="$qdir/oc-$role-$env.container"
       if [[ ! -f $f ]]; then
@@ -666,19 +1009,30 @@ check_ctr_01() {
         [[ -n $p ]] && bad+=" [oc-$role-$env: $p]"
       done < <(q_check_container "$f" "$env" "$role")
     done
-    # Podman's own Quadlet generator must accept the files, and what it generates must carry
-    # the flags (a second look, at what would really run).
+    # Podman's own Quadlet generator must accept the files, and what it generates is checked
+    # flag by flag (a second look, at what would really run).
     if [[ -x /usr/libexec/podman/quadlet ]]; then
-      if ! gen=$(QUADLET_UNIT_DIRS="$qdir" /usr/libexec/podman/quadlet -dryrun -user 2>&1); then
-        bad+=" [oc-$env: the Quadlet generator rejects the files]"
-      elif problems=$(grep '^quadlet-generator' <<<"$gen" | grep -v 'Loading source unit file' || true) && [[ -n $problems ]]; then
-        bad+=" [oc-$env: the Quadlet generator reports a problem: ${problems:0:120}]"
+      rc=0
+      gen=$(QUADLET_UNIT_DIRS="$qdir" /usr/libexec/podman/quadlet -dryrun -user 2>&1) || rc=$?
+      problems=$(grep '^quadlet-generator' <<<"$gen" | grep -v 'Loading source unit file' || true)
+      if [[ $rc -ne 0 || -n $problems ]]; then
+        bad+=" [oc-$env: the Quadlet generator rejects the files: ${problems:0:120}]"
       else
+        while IFS= read -r line; do
+          [[ $line == Exec*=* ]] || continue
+          ex=${line#*=}
+          ex=${ex#-}
+          [[ $ex == '/usr/bin/podman '* ]] || bad+=" [oc-$env: the generated units run '${ex:0:50}', not podman]"
+        done <<<"$gen"
         for role in cms web; do
-          flags=$(grep -m1 "^ExecStart=/usr/bin/podman run .*--name=oc-$role-$env " <<<"$gen" || true)
-          for p in '--read-only' '--cap-drop=all' '--security-opt=no-new-privileges' '--userns keep-id' '--pids-limit' '--memory=' '--publish 127.0.0.1:'; do
-            [[ $flags == *"$p"* ]] || bad+=" [oc-$role-$env: generated command lacks $p]"
-          done
+          line=$(awk -v s="---oc-$role-$env.service---" '$0 == s {f = 1; next} /^---.*---$/ {f = 0} f && /^ExecStart=/ {print; exit}' <<<"$gen")
+          if [[ -z $line ]]; then
+            bad+=" [oc-$role-$env: the generator produced no service]"
+            continue
+          fi
+          while IFS= read -r p; do
+            [[ -n $p ]] && bad+=" [oc-$role-$env generated: $p]"
+          done < <(q_check_generated "$env" "$role" "$line")
         done
       fi
     else
@@ -688,7 +1042,7 @@ check_ctr_01() {
   if [[ -n $bad ]]; then
     fail "container definitions are not safe:$bad"
   else
-    pass "$n Quadlet files: non-root user mapping, read-only root, no capabilities, no-new-privileges, memory and pids limits, ports on 127.0.0.1 only, own data folder only, no container socket; Podman's generator accepts them"
+    pass "$n Quadlet files hold only allowed settings: non-root user mapping, read-only root, no capabilities, no-new-privileges, memory and pids limits, ports on 127.0.0.1 only, own data folder only, no container socket, each its own environment file; Podman's generator accepts them and its command has no other flags"
   fi
 }
 
@@ -744,33 +1098,72 @@ check_ctr_03() {
 }
 
 check_svc_02() {
-  local env f key line bad="" missing n=0 stray
+  local env cms web key bad="" missing n=0 stray extra a b f line
   for env in "${OC_ENV_LIST[@]}"; do
-    f="$OC_SECRET_DIR/$env.env"
-    if [[ ! -f $f ]]; then
-      bad+=" [$f missing]"
-      continue
-    fi
-    n=$((n + 1))
-    [[ $(stat -c '%a %U %G' -- "$f") == "640 root oc-$env" ]] || bad+=" [$f is $(stat -c '%a %U:%G' -- "$f"), want 640 root:oc-$env]"
-    missing=""
-    for key in "${USERS_ENV_KEYS[@]}"; do
-      line=$(grep -m1 "^$key=" -- "$f" || true)
-      [[ -n $line ]] || {
-        missing+=" $key"
+    cms="$OC_SECRET_DIR/$env.env"
+    web="$OC_SECRET_DIR/$env.web.env"
+    for f in "$cms" "$web"; do
+      if [[ ! -f $f ]]; then
+        bad+=" [$f missing]"
         continue
-      }
-      # Only names are reported, never values. OC_CMS_API_TOKEN may stay empty until Strapi has one.
-      if [[ $key != OC_CMS_API_TOKEN && ${line#*=} == "" ]]; then missing+=" $key(empty)"; fi
+      fi
+      n=$((n + 1))
+      [[ $(stat -c '%a %U %G' -- "$f") == "640 root oc-$env" ]] || bad+=" [$f is $(stat -c '%a %U:%G' -- "$f"), want 640 root:oc-$env]"
     done
-    [[ -z $missing ]] || bad+=" [$f lacks:$missing]"
+    # Only key NAMES are ever looked at or printed, never values.
+    if [[ -f $cms ]]; then
+      missing=""
+      for key in "${USERS_CMS_KEYS[@]}"; do
+        grep -q "^$key=" -- "$cms" || {
+          missing+=" $key"
+          continue
+        }
+        [[ -n $(users_file_value "$cms" "$key") ]] || missing+=" $key(empty)"
+      done
+      [[ -z $missing ]] || bad+=" [$cms lacks:$missing]"
+    fi
+    if [[ -f $web ]]; then
+      missing=""
+      for key in "${USERS_WEB_KEYS[@]}"; do
+        grep -q "^$key=" -- "$web" || {
+          missing+=" $key"
+          continue
+        }
+        if [[ -z $(users_file_value "$web" "$key") ]] && ! word_in "${USERS_WEB_MAY_BE_EMPTY[*]}" "$key"; then
+          missing+=" $key(empty)"
+        fi
+      done
+      [[ -z $missing ]] || bad+=" [$web lacks:$missing]"
+      # The website's file holds ONLY the website's keys. Anything else (a database setting,
+      # a JWT secret, the file master key, ...) is a secret the website must not have.
+      extra=""
+      while IFS= read -r line; do
+        line=${line#"${line%%[![:space:]]*}"}
+        [[ -z $line || $line == \#* || $line == \;* ]] && continue
+        if [[ $line =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; then
+          key=${BASH_REMATCH[1]}
+          word_in "${USERS_WEB_KEYS[*]}" "$key" || extra+=" $key"
+        else
+          extra+=" (a line that is not NAME=value)"
+        fi
+      done <"$web"
+      [[ -z $extra ]] || bad+=" [$web holds keys the website must not have:$extra]"
+    fi
+    # The one shared secret must be the same in both files.
+    if [[ -f $cms && -f $web ]]; then
+      a=$(users_file_value "$cms" OC_INTERNAL_SECRET)
+      b=$(users_file_value "$web" OC_INTERNAL_SECRET)
+      if [[ -z $a || $a != "$b" ]]; then
+        bad+=" [OC_INTERNAL_SECRET differs between $cms and $web, or is empty]"
+      fi
+    fi
   done
   stray=$(find "$OC_SECRET_DIR" -type f -perm /o+rwx 2>/dev/null | head -n 3 | tr '\n' ' ')
   [[ -z $stray ]] || bad+=" [world-accessible files in $OC_SECRET_DIR: $stray]"
   if [[ -n $bad ]]; then
     fail "secret files are wrong:$bad"
   else
-    pass "$n secret file(s) are 0640 root:oc-<env> and hold every required key"
+    pass "$n secret file(s) are 0640 root:oc-<env>; the website's file holds only its own keys; OC_INTERNAL_SECRET matches in both files of each environment"
   fi
 }
 
@@ -1021,6 +1414,16 @@ run_check() {
 main() {
   local config=${OC_CONFIG:-$OC_INFRA_DIR/server.env} cfg_err entry
   oc_require_root
+  # VERIFY_CONTAINER=1 reads written configuration instead of live state. On a real host that
+  # would quietly stop checking the firewall, the services and Podman, so it is refused there,
+  # the same way the bootstrap refuses OC_CONTAINER=1 on a host that is running systemd.
+  if in_container && [[ -d /run/systemd/system ]]; then
+    printf 'FAIL CFG-01 VERIFY_CONTAINER=1 is set but systemd is running on this machine. That setting is for the test container only; on a real server it would skip the live checks. Unset it and run verify.sh again.
+'
+    printf 'SUMMARY pass=0 fail=1 warn=0 skip=0
+'
+    exit 1
+  fi
   if ! cfg_err=$( (
     oc_load_config "$config"
     oc_validate_config
@@ -1042,4 +1445,7 @@ main() {
   [[ $N_FAIL -eq 0 ]]
 }
 
-main "$@"
+# Run unless this file is being sourced (the tests source it to exercise single functions).
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

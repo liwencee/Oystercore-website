@@ -185,6 +185,32 @@ done
 section "idempotence: second run in the same container"
 snapshot "$work/snap1.txt"
 secrets_before=$(sha256sum /etc/oc/*.env | sha256sum)
+# The website gets its own, smaller secrets file (fix round 1). Before the second run: what
+# each file holds, and that the one shared secret is the same in both files.
+secret_of() { awk -F= '$1 == "OC_INTERNAL_SECRET" {sub(/^[^=]*=/, ""); v = $0} END {print v}' "$1"; }
+# shellcheck disable=SC2317  # called through yes_if
+shared_match() { # true if, in every environment, both files hold the same non-empty secret
+  local e a b
+  for e in prod staging; do
+    a=$(secret_of "/etc/oc/$e.env")
+    b=$(secret_of "/etc/oc/$e.web.env")
+    [[ -n $a && $a == "$b" ]] || return 1
+  done
+}
+shared_hash() { for e in prod staging; do secret_of "/etc/oc/$e.env"; secret_of "/etc/oc/$e.web.env"; done | sha256sum; }
+web_key_names() { sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$1" | sort | tr '\n' ' '; }
+yes_if "each environment has a CMS file and a website file, 0640 root:oc-<env>" bash -c "
+  for e in prod staging; do
+    for f in /etc/oc/\$e.env /etc/oc/\$e.web.env; do
+      [[ \$(stat -c '%a %U %G' \$f) == '640 root oc-'\$e ]] || exit 1
+    done
+  done"
+yes_if "the website file holds exactly its nine keys and no others" test "$(web_key_names /etc/oc/prod.web.env)" = "CSP_MODE HOST NODE_ENV OC_CMS_API_TOKEN OC_CMS_URL OC_DATA_DIR OC_INTERNAL_SECRET PORT PUBLIC_SITE_URL "
+yes_if "the website file has none of the CMS-only keys" bash -c "! grep -qE '^(DATABASE_|APP_KEYS|API_TOKEN_SALT|ADMIN_JWT_SECRET|TRANSFER_TOKEN_SALT|JWT_SECRET|ENCRYPTION_KEY|OC_FILE_MASTER_KEY)' /etc/oc/prod.web.env /etc/oc/staging.web.env"
+yes_if "the CMS file does not carry the API token placeholder (the token is the website's)" bash -c "! grep -q '^OC_CMS_API_TOKEN' /etc/oc/prod.env /etc/oc/staging.env"
+yes_if "OC_INTERNAL_SECRET is the same in both files of each environment (first run)" shared_match
+yes_if "the two environments do not share a secret" test "$(secret_of /etc/oc/prod.env)" != "$(secret_of /etc/oc/staging.env)"
+shared_before=$(shared_hash)
 rc=0
 run_logged "$work/bootstrap2.log" bash "$infra/bootstrap.sh" || rc=$?
 yes_if "second bootstrap run exits 0" test "$rc" -eq 0
@@ -195,6 +221,8 @@ else
   notok "the second run changed files"
   head -n 40 "$work/snap.diff"
 fi
+yes_if "OC_INTERNAL_SECRET is still the same in both files of each environment (second run)" shared_match
+yes_if "neither OC_INTERNAL_SECRET value changed on the second run" test "$(shared_hash)" = "$shared_before"
 secrets_after=$(sha256sum /etc/oc/*.env | sha256sum)
 yes_if "no secret was regenerated" test "$secrets_after" = "$secrets_before"
 if grep -q 'DONE changes=0$' "$work/bootstrap2.log"; then
@@ -320,15 +348,19 @@ expect "verify.sh is clean again" bash -c "bash '$infra/verify.sh' | grep -q '^S
 # --------------------------------------------------------------------------------------
 section "the verifier notices breakage (each change is made, checked, and undone)"
 # mutation ID DESCRIPTION APPLY REVERT: verify.sh must print FAIL <ID> while the change is in place.
-mutation() {
-  local id=$1 desc=$2 apply=$3 revert=$4 out
+mutation() { # ID DESCRIPTION APPLY REVERT [TEXT THAT MUST BE IN THE FAIL LINE]
+  local id=$1 desc=$2 apply=$3 revert=$4 expect=${5:-} out line
   bash -c "$apply"
   out=$(bash "$infra/verify.sh" 2>&1 || true)
   bash -c "$revert"
-  if grep -q "^FAIL $id " <<<"$out"; then
-    ok "$id fails when $desc"
-  else
+  line=$(grep "^FAIL $id " <<<"$out" | head -n 1 || true)
+  if [[ -z $line ]]; then
     notok "$id still does not fail when $desc"
+  elif [[ -n $expect && $line != *"$expect"* ]]; then
+    notok "$id fails when $desc, but not for the expected reason (wanted '$expect')"
+    printf '         | %s\n' "${line:0:400}"
+  else
+    ok "$id fails when $desc${expect:+ (because: $expect)}"
   fi
 }
 mutation SVC-02 "a secret file is world-readable" "chmod 0644 /etc/oc/prod.env" "chmod 0640 /etc/oc/prod.env"
@@ -362,29 +394,36 @@ mutation OS-01 "automatic updates are switched off" \
   "sed -i 's/Unattended-Upgrade \"0\"/Unattended-Upgrade \"1\"/' /etc/apt/apt.conf.d/20auto-upgrades"
 qweb=/home/oc-prod/.config/containers/systemd/oc-web-prod.container
 qcms=/home/oc-prod/.config/containers/systemd/oc-cms-prod.container
+# Backups of the files being changed live OUTSIDE the Quadlet folder: an extra file in that
+# folder is itself a CTR-01 failure, which would make every test below pass for the wrong
+# reason. Each test also states WHY CTR-01 must fail, and that text must be in the FAIL line.
+qbak=$work/qbak
+mkdir -p "$qbak"
+yes_if "before the Quadlet changes: CTR-01, SVC-02 and NET-03 pass on the untouched files (so a FAIL below is caused by the change)" \
+  bash -c "bash '$infra/verify.sh' 2>&1 | grep -cE '^PASS (CTR-01|SVC-02|NET-03) ' | grep -qx 3"
 # A Quadlet change: save the file, change it, check, put it back byte for byte.
-qmutation() { # DESCRIPTION FILE SED-EXPRESSION
-  mutation CTR-01 "$1" "cp -p $2 $2.orig && sed -i '$3' $2" "mv -f $2.orig $2"
+qmutation() { # DESCRIPTION FILE SED-EXPRESSION EXPECTED-TEXT-IN-THE-FAIL-LINE
+  mutation CTR-01 "$1" "cp -p $2 $qbak/$(basename "$2") && sed -i '$3' $2" "mv -f $qbak/$(basename "$2") $2" "$4"
 }
-qmutation "the web container loses ReadOnly=true" "$qweb" '/^ReadOnly=true$/d'
-qmutation "the web container is allowed all capabilities" "$qweb" '/^DropCapability=ALL$/d'
-qmutation "the web container may gain privileges" "$qweb" 's/^NoNewPrivileges=true/NoNewPrivileges=false/'
-qmutation "the CMS container runs as root" "$qcms" 's/^User=[0-9]*$/User=0/'
-qmutation "the CMS container loses its user mapping" "$qcms" '/^UserNS=keep-id$/d'
-qmutation "the CMS container loses its memory limit" "$qcms" 's/^PodmanArgs=--memory=.*$/PodmanArgs=--memory-swap=1536m/'
-qmutation "the CMS container loses its pids limit" "$qcms" '/^PidsLimit=/d'
-qmutation "the CMS container loses its tmpfs" "$qcms" '/^Tmpfs=/d'
-qmutation "the CMS container publishes on every interface" "$qcms" 's/^PublishPort=127.0.0.1:/PublishPort=0.0.0.0:/'
-qmutation "the CMS container mounts the host's Podman socket" "$qcms" 's|^Volume=/run/clamav:/run/clamav:ro|Volume=/run/podman:/run/podman|'
-qmutation "the CMS container mounts all of /var/lib/oc" "$qcms" 's|^Volume=/var/lib/oc/prod:/var/lib/oc/prod|Volume=/var/lib/oc:/var/lib/oc|'
-qmutation "the CMS container mounts ClamAV read-write" "$qcms" 's|^Volume=/run/clamav:/run/clamav:ro|Volume=/run/clamav:/run/clamav|'
-qmutation "the web container mounts the whole data folder" "$qweb" 's|^Volume=/var/lib/oc/prod/media:/var/lib/oc/prod/media:ro|Volume=/var/lib/oc/prod:/var/lib/oc/prod|'
-qmutation "the web container gets a second image line" "$qweb" 's|^Image=.*|&\nImage=localhost/oc-web:other|'
-qmutation "the web container is made privileged" "$qweb" 's|^PidsLimit=256|&\nPodmanArgs=--privileged|'
-qmutation "the web container loses its health check" "$qweb" '/^HealthCmd=/d'
-qmutation "the web container uses a different environment file" "$qweb" 's|^EnvironmentFile=.*|EnvironmentFile=/etc/oc/staging.env|'
-qmutation "the web container uses host networking" "$qweb" 's|^Network=.*|Network=host|'
-qmutation "the web container gets an unknown key" "$qweb" 's|^ReadOnly=true|&\nNotARealKey=1|'
+qmutation "the web container loses ReadOnly=true" "$qweb" '/^ReadOnly=true$/d' "ReadOnly is not true"
+qmutation "the web container is allowed all capabilities" "$qweb" '/^DropCapability=ALL$/d' "DropCapability is not ALL"
+qmutation "the web container may gain privileges" "$qweb" 's/^NoNewPrivileges=true/NoNewPrivileges=false/' "NoNewPrivileges is not true"
+qmutation "the CMS container runs as root" "$qcms" 's/^User=[0-9]*$/User=0/' "User is not the environment user's id"
+qmutation "the CMS container loses its user mapping" "$qcms" '/^UserNS=keep-id$/d' "UserNS"
+qmutation "the CMS container loses its memory limit" "$qcms" 's/^PodmanArgs=--memory=.*$/PodmanArgs=--memory-swap=1536m/' "no memory limit"
+qmutation "the CMS container loses its pids limit" "$qcms" '/^PidsLimit=/d' "PidsLimit"
+qmutation "the CMS container loses its tmpfs" "$qcms" '/^Tmpfs=/d' "Tmpfs"
+qmutation "the CMS container publishes on every interface" "$qcms" 's/^PublishPort=127.0.0.1:/PublishPort=0.0.0.0:/' "PublishPort is not exactly 127.0.0.1"
+qmutation "the CMS container mounts the host's Podman socket" "$qcms" 's|^Volume=/run/clamav:/run/clamav:ro|Volume=/run/podman:/run/podman|' "Volume '/run/podman:/run/podman' is not allowed"
+qmutation "the CMS container mounts all of /var/lib/oc" "$qcms" 's|^Volume=/var/lib/oc/prod:/var/lib/oc/prod|Volume=/var/lib/oc:/var/lib/oc|' "Volume '/var/lib/oc:/var/lib/oc' is not allowed"
+qmutation "the CMS container mounts ClamAV read-write" "$qcms" 's|^Volume=/run/clamav:/run/clamav:ro|Volume=/run/clamav:/run/clamav|' "Volume '/run/clamav:/run/clamav' is not allowed"
+qmutation "the web container mounts the whole data folder" "$qweb" 's|^Volume=/var/lib/oc/prod/media:/var/lib/oc/prod/media:ro|Volume=/var/lib/oc/prod:/var/lib/oc/prod|' "Volume '/var/lib/oc/prod:/var/lib/oc/prod' is not allowed"
+qmutation "the web container gets a second image line" "$qweb" 's|^Image=.*|&\nImage=localhost/oc-web:other|' "Image appears 2 times"
+qmutation "the web container is made privileged" "$qweb" 's|^PidsLimit=256|&\nPodmanArgs=--privileged|' "PodmanArgs has '--privileged'"
+qmutation "the web container loses its health check" "$qweb" '/^HealthCmd=/d' "HealthCmd"
+qmutation "the web container uses a different environment file" "$qweb" 's|^EnvironmentFile=.*|EnvironmentFile=/etc/oc/staging.env|' "EnvironmentFile is not /etc/oc/prod.web.env"
+qmutation "the web container uses host networking" "$qweb" 's|^Network=.*|Network=host|' "Network is not oc-prod.network"
+qmutation "the web container gets an unknown key" "$qweb" 's|^ReadOnly=true|&\nNotARealKey=1|' "key NotARealKey in [Container] is not allowed"
 mutation CTR-02 "an environment user loses its subuid range" "cp -p /etc/subuid /tmp/subuid.orig && sed -i '/^oc-prod:/d' /etc/subuid" "mv -f /tmp/subuid.orig /etc/subuid"
 mutation CTR-02 "an environment user loses its subgid range" "cp -p /etc/subgid /tmp/subgid.orig && sed -i '/^oc-staging:/d' /etc/subgid" "mv -f /tmp/subgid.orig /etc/subgid"
 mutation CTR-02 "two environment users share a subuid range" \
@@ -403,9 +442,186 @@ mutation TLS-01 "the origin key does not match the origin certificate" \
   "cp -p /tmp/origin.key.bak /etc/ssl/oc/origin.key && rm -f /tmp/origin.key.bak"
 mutation SSH-03 "an admin loses the authorized key (lock-out risk)" \
   "mv /home/bob/.ssh/authorized_keys /tmp/bob.keys" "mv /tmp/bob.keys /home/bob/.ssh/authorized_keys"
+# --- fix round 1: the spelling tricks and gaps the reviewer found; each must fail, and fail for
+# the stated reason ---
+# Quadlet and systemd accept "Key = value" and continued lines; a check that reads only
+# "Key=value" at the start of a line would never see these.
+webuid=$(id -u oc-prod)
+qmutation "the web container gets PodmanArgs = --privileged (spaces around =)" "$qweb" '/^\[Container\]$/a PodmanArgs = --privileged' "PodmanArgs has '--privileged'"
+qmutation "the web container gets AddCapability = ALL (spaces around =)" "$qweb" '/^\[Container\]$/a AddCapability = ALL' "key AddCapability in [Container] is not allowed"
+qmutation "the web container mounts a podman.sock with Volume = (spaces around =)" "$qweb" "/^\\[Container\\]\$/a Volume = /run/user/$webuid/podman/podman.sock:/s" "Volume '/run/user/$webuid/podman/podman.sock:/s' is not allowed"
+qmutation "the web container mounts docker.sock after leading spaces" "$qweb" '/^\[Container\]$/a    Volume=/var/run/docker.sock:/var/run/docker.sock' "Volume '/var/run/docker.sock:/var/run/docker.sock' is not allowed"
+qmutation "the web container gets a key with a tab before the =" "$qweb" "/^\\[Container\\]\$/a AddCapability\t= ALL" "key AddCapability in [Container] is not allowed"
+mutation CTR-01 "a PodmanArgs line is continued with a backslash and hides --privileged" \
+  "cp -p $qweb $qbak/web.orig && awk '{print} /^\\[Container\\]\$/ {print \"PodmanArgs=--memory=512m \\134\"; print \"--privileged\"}' $qbak/web.orig >$qbak/web.tmp && cat $qbak/web.tmp >$qweb" \
+  "mv -f $qbak/web.orig $qweb" "PodmanArgs has '--privileged'"
+for k in Unmask SeccompProfile SecurityLabelNested UIDMap GIDMap SubUIDMap ExposeHostPort GlobalArgs Annotation SecurityLabelDisable AddDevice Mount Pod Ulimit Sysctl Notify; do
+  qmutation "the web container gets $k=" "$qweb" "/^\\[Container\\]\$/a $k=x" "key $k in [Container] is not allowed"
+done
+qmutation "the web container gets a [Service] ExecStartPre" "$qweb" '/^\[Service\]$/a ExecStartPre=/usr/bin/podman run --privileged x' "key ExecStartPre in [Service] is not allowed"
+qmutation "the web container gets a second environment file" "$qweb" 's|^EnvironmentFile=.*|&\nEnvironmentFile=/etc/oc/prod.env|' "EnvironmentFile appears 2 times"
+qmutation "the web container is pointed at the CMS's secrets file" "$qweb" 's|^EnvironmentFile=.*|EnvironmentFile=/etc/oc/prod.env|' "EnvironmentFile is not /etc/oc/prod.web.env"
+qmutation "the CMS container is pointed at the website's file" "$qcms" 's|^EnvironmentFile=.*|EnvironmentFile=/etc/oc/prod.web.env|' "EnvironmentFile is not /etc/oc/prod.env"
+qmutation "the web container sets a secret in Environment=" "$qweb" '/^\[Container\]$/a Environment=OC_FILE_MASTER_KEY=x' "environment variable OC_FILE_MASTER_KEY is not allowed"
+qmutation "the web container sets NODE_OPTIONS to load a file" "$qweb" 's|^Environment=NODE_OPTIONS=.*|Environment=NODE_OPTIONS=--require /var/lib/oc/prod/evil.js|' "NODE_OPTIONS may only set"
+qmutation "the web container's image line carries an extra flag" "$qweb" 's|^Image=.*|Image=localhost/oc-web:x --privileged|' "Image is not a local oc-cms or oc-web image"
+qmutation "the web container uses an image from a registry" "$qweb" 's|^Image=.*|Image=docker.io/library/node:22|' "Image is not a local oc-cms or oc-web image"
+qmutation "the web container gets a [Pod] section" "$qweb" 's|^\[Install\]$|[Pod]\nPodName=x\n&|' "section [Pod] is not allowed"
+mutation CTR-01 "a drop-in folder next to the web Quadlet file adds --privileged" \
+  "mkdir -p $qweb.d && printf '[Container]\nPodmanArgs=--privileged\n' >$qweb.d/zz.conf" "rm -rf $qweb.d" "unexpected entry 'oc-web-prod.container.d"
+mutation CTR-01 "an extra container file appears in the Quadlet folder" \
+  "printf '[Container]\nImage=localhost/oc-web:x\n' >$(dirname "$qweb")/evil.container" "rm -f $(dirname "$qweb")/evil.container" "unexpected entry 'evil.container'"
+qnet=$(dirname "$qweb")/oc-prod.network
+mutation CTR-01 "the private network file gets another setting" \
+  "cp -p $qnet $qbak/net.orig && printf 'Internal=false\n' >>$qnet" "mv -f $qbak/net.orig $qnet" "oc-prod.network has"
+
+# --- the website's secrets file: only the website's keys ---
+wfile=/etc/oc/prod.web.env
+# wmutation DESCRIPTION APPLY-ON-COPY EXPECTED: change the website's file, check, put it back
+wmutation() {
+  mutation SVC-02 "$1" "cp -p $wfile $qbak/web.env.orig && $2" "mv -f $qbak/web.env.orig $wfile" "$3"
+}
+for k in DATABASE_PASSWORD DATABASE_HOST DATABASE_NAME APP_KEYS API_TOKEN_SALT ADMIN_JWT_SECRET TRANSFER_TOKEN_SALT JWT_SECRET ENCRYPTION_KEY OC_FILE_MASTER_KEY; do
+  wmutation "the website's file holds the CMS-only key $k" "printf '%s=x\n' $k >>$wfile" "must not have: $k"
+done
+wmutation "the website's file holds an unknown key" "printf 'SOMETHING_ELSE=x\n' >>$wfile" "must not have: SOMETHING_ELSE"
+wmutation "the website's file has a line that is not NAME=value" "printf 'export FOO=1\n' >>$wfile" "not NAME=value"
+wmutation "the two files of an environment hold different OC_INTERNAL_SECRET values" \
+  "sed 's|^OC_INTERNAL_SECRET=.*|OC_INTERNAL_SECRET=a-different-value-0123456789|' $qbak/web.env.orig >$qbak/web.env.tmp && cat $qbak/web.env.tmp >$wfile" "OC_INTERNAL_SECRET differs"
+wmutation "the website's file is world-readable" "chmod 0644 $wfile" "is 644 root:oc-prod, want 640 root:oc-prod"
+wmutation "the website's file belongs to the wrong group" "chgrp oc-staging $wfile" "want 640 root:oc-prod"
+wmutation "the website's file loses a required key" "sed '/^CSP_MODE=/d' $qbak/web.env.orig >$qbak/web.env.tmp && cat $qbak/web.env.tmp >$wfile" "lacks: CSP_MODE"
+mutation SVC-02 "the website's file is missing" "mv $wfile $qbak/web.env.gone" "mv $qbak/web.env.gone $wfile" "prod.web.env missing"
+
+# --- Nginx layouts the parser must understand: a TLS site without the client certificate
+# must fail NET-03 however it is written ---
+ngxdir=/etc/nginx/conf.d
+tls="ssl_certificate /etc/ssl/oc/origin.pem; ssl_certificate_key /etc/ssl/oc/origin.key;"
+mutation NET-03 "a one-line TLS server without the client certificate is added" \
+  "printf 'server { listen 8443 ssl; server_name oneline.example.test; $tls }\n' >$ngxdir/zz-test.conf" "rm -f $ngxdir/zz-test.conf" "oneline.example.test: ssl_verify_client ''"
+mutation NET-03 "a TLS server with 'server' and '{' on separate lines is added without the client certificate" \
+  "printf 'server\n{\n  listen 8444 ssl;\n  server_name twoline.example.test;\n  $tls\n}\n' >$ngxdir/zz-test.conf" "rm -f $ngxdir/zz-test.conf" "twoline.example.test: ssl_verify_client ''"
+mutation NET-03 "a server turns TLS on with 'ssl on;' and has no client certificate" \
+  "printf 'server { listen 8445; ssl on; server_name sslon.example.test; $tls }\n' >$ngxdir/zz-test.conf" "rm -f $ngxdir/zz-test.conf" "sslon.example.test: ssl_verify_client ''"
+mutation NET-03 "a TLS server asks for the client certificate only optionally" \
+  "printf 'server { listen 8446 ssl; server_name optional.example.test; $tls ssl_client_certificate /etc/nginx/oc/cloudflare-origin-pull-ca.pem; ssl_verify_client optional; }\n' >$ngxdir/zz-test.conf" "rm -f $ngxdir/zz-test.conf" "optional.example.test: ssl_verify_client 'optional'"
+mutation NET-03 "a TLS server switches verification off with a quoted value" \
+  "printf 'server { listen 8447 ssl; server_name quoted.example.test; $tls ssl_verify_client \"off\"; }\n' >$ngxdir/zz-test.conf" "rm -f $ngxdir/zz-test.conf" "quoted.example.test: ssl_verify_client 'off'"
+mutation NET-03 "a TLS server trusts a different CA" \
+  "printf 'server { listen 8448 ssl; server_name otherca.example.test; $tls ssl_client_certificate /etc/ssl/oc/origin.pem; ssl_verify_client on; }\n' >$ngxdir/zz-test.conf" "rm -f $ngxdir/zz-test.conf" "otherca.example.test: client CA differs"
+mutation NET-03 "two servers share one line and the second is TLS without the client certificate" \
+  "printf 'server { listen 8449; return 404; } server { listen 8450 ssl; server_name second.example.test; $tls }\n' >$ngxdir/zz-test.conf" "rm -f $ngxdir/zz-test.conf" "second.example.test: ssl_verify_client ''"
+# The parser is not just refusing everything: a correct one-line TLS server passes.
+printf 'server { listen 8451 ssl; server_name ok.example.test; %s ssl_client_certificate /etc/nginx/oc/cloudflare-origin-pull-ca.pem; ssl_verify_client on; ssl_protocols TLSv1.2 TLSv1.3; return 404; }\n' "$tls" >"$ngxdir/zz-test.conf"
+bash "$infra/verify.sh" >"$work/verify-ngx-ok.txt" 2>&1 || true
+rm -f "$ngxdir/zz-test.conf"
+yes_if "a correct one-line TLS server is seen and accepted (NET-03 counts 5 TLS sites)" grep -q '^PASS NET-03 all 5 TLS sites' "$work/verify-ngx-ok.txt"
+
+# --- VERIFY_CONTAINER=1 on a real host must not quietly skip the live checks ---
+realhost_made=0
+if [[ ! -d /run/systemd/system ]]; then
+  mkdir -p /run/systemd/system
+  realhost_made=1
+fi
+rc=0
+bash "$infra/verify.sh" >"$work/verify-realhost.txt" 2>&1 || rc=$?
+if [[ $realhost_made -eq 1 ]]; then
+  rmdir /run/systemd/system
+  rmdir /run/systemd 2>/dev/null || true
+fi
+yes_if "verify.sh refuses VERIFY_CONTAINER=1 when systemd is running (FAIL CFG-01)" grep -q '^FAIL CFG-01 ' "$work/verify-realhost.txt"
+yes_if "and exits non-zero" test "$rc" -ne 0
+yes_if "and prints no PASS or SKIP line at all" bash -c "! grep -qE '^(PASS|SKIP) ' '$work/verify-realhost.txt'"
+
+# --- the generated podman command, checked flag by flag (unit tests on crafted commands) ---
+gen_line() { # ROLE: the real generated ExecStart= line for prod
+  QUADLET_UNIT_DIRS=/home/oc-prod/.config/containers/systemd "$quadlet" -dryrun -user 2>/dev/null |
+    awk -v s="---oc-$1-prod.service---" '$0 == s {f = 1; next} /^---.*---$/ {f = 0} f && /^ExecStart=/ && !done {print; done = 1}'
+}
+gen_problems() { # ROLE LINE: what q_check_generated says about LINE
+  OC_TEST_LINE=$2 bash -c 'source "$1/verify.sh"; q_check_generated prod "$2" "$OC_TEST_LINE"' _ "$infra" "$1"
+}
+web_line=$(gen_line web)
+cms_line=$(gen_line cms)
+yes_if "the real generated web command has no problem (positive control)" test -z "$(gen_problems web "$web_line")"
+yes_if "the real generated CMS command has no problem (positive control)" test -z "$(gen_problems cms "$cms_line")"
+gen_case() { # DESCRIPTION ROLE FROM TO EXPECTED: replace FROM by TO in the real command; it must be flagged, for the stated reason
+  local line problems
+  if [[ $2 == web ]]; then line=$web_line; else line=$cms_line; fi
+  if [[ $line != *"$3"* ]]; then
+    notok "$1 (test bug: '$3' is not in the generated command)"
+    return
+  fi
+  line=${line/"$3"/"$4"}
+  problems=$(gen_problems "$2" "$line")
+  if [[ -z $problems ]]; then
+    notok "the generated-command check misses: $1"
+  elif [[ $problems != *"$5"* ]]; then
+    notok "the generated-command check flags '$1' but not for the expected reason (wanted '$5')"
+    printf '         | %s\n' "${problems:0:300}"
+  else
+    ok "the generated-command check flags: $1"
+  fi
+}
+img=' localhost/oc-web:bootstrap'
+gen_case "--privileged" web "$img" " --privileged$img" "flag '--privileged'"
+gen_case "--cap-add=ALL" web "--cap-drop=all" "--cap-drop=all --cap-add=ALL" "flag '--cap-add'"
+gen_case "--cap-drop dropped" web "--cap-drop=all" "--cap-drop=net_raw" "--cap-drop is 'net_raw'"
+gen_case "--network=host" web "--network=oc-prod" "--network=host" "--network is 'host'"
+gen_case "--net host" web "--network=oc-prod" "--net host" "flag '--net'"
+gen_case "seccomp=unconfined" web "--security-opt=no-new-privileges" "--security-opt=no-new-privileges --security-opt=seccomp=unconfined" "--security-opt 'seccomp=unconfined'"
+gen_case "label=disable" web "--security-opt=no-new-privileges" "--security-opt=no-new-privileges --security-opt label=disable" "--security-opt 'label=disable'"
+gen_case "apparmor=unconfined" web "--security-opt=no-new-privileges" "--security-opt=no-new-privileges --security-opt apparmor=unconfined" "--security-opt 'apparmor=unconfined'"
+gen_case "no-new-privileges replaced" web "--security-opt=no-new-privileges" "--security-opt=label=type:x" "--security-opt 'label=type:x'"
+gen_case "a podman socket mount" web "$img" " -v /run/user/$webuid/podman/podman.sock:/s$img" "the mount '/run/user/$webuid/podman/podman.sock:/s'"
+gen_case "a docker socket mount" web "$img" " -v /var/run/docker.sock:/var/run/docker.sock$img" "the mount '/var/run/docker.sock:/var/run/docker.sock'"
+gen_case "a mount of /" web "$img" " -v /:/host$img" "the mount '/:/host'"
+gen_case "--mount" web "$img" " --mount type=bind,src=/,dst=/h$img" "flag '--mount'"
+gen_case "--volume" web "$img" " --volume /etc:/etc$img" "flag '--volume'"
+gen_case "--pid=host" web "$img" " --pid=host$img" "flag '--pid'"
+gen_case "--ipc=host" web "$img" " --ipc=host$img" "flag '--ipc'"
+gen_case "--uts=host" web "$img" " --uts=host$img" "flag '--uts'"
+gen_case "--userns=host" web "--userns keep-id" "--userns host" "--userns is 'host'"
+gen_case "--device" web "$img" " --device /dev/fuse$img" "flag '--device'"
+gen_case "--security-opt systempaths=unconfined" web "$img" " --security-opt systempaths=unconfined$img" "--security-opt 'systempaths=unconfined'"
+gen_case "a root user" web "--user=$webuid:" "--user=0:" "--user is '0:"
+gen_case "publish on 0.0.0.0" web "--publish 127.0.0.1:4321:4321" "--publish 0.0.0.0:4321:4321" "--publish '0.0.0.0:4321:4321'"
+gen_case "publish on every interface (no address)" web "--publish 127.0.0.1:4321:4321" "--publish 4321:4321" "--publish '4321:4321'"
+gen_case "a second publish" web "$img" " --publish 127.0.0.1:2222:22$img" "--publish '127.0.0.1:2222:22'"
+gen_case "the CMS's env file for the website" web "--env-file /etc/oc/prod.web.env" "--env-file /etc/oc/prod.env" "--env-file is '/etc/oc/prod.env'"
+gen_case "the website's env file for the CMS" cms "--env-file /etc/oc/prod.env" "--env-file /etc/oc/prod.web.env" "--env-file is '/etc/oc/prod.web.env'"
+gen_case "an extra env file" web "$img" " --env-file /etc/oc/prod.env$img" "--env-file is '/etc/oc/prod.env'"
+gen_case "a command after the image" web "$img" "$img /bin/sh" "an extra argument after the image"
+gen_case "an image from a registry" web "$img" " docker.io/library/node:22" "the image 'docker.io/library/node:22'"
+gen_case "--read-only removed" web " --read-only" "" "lacks: --read-only"
+gen_case "the memory limit removed" web " --memory=512m" "" "lacks: --memory"
+gen_case "the pids limit removed" web "--pids-limit 256" "" "lacks: --pids-limit"
+gen_case "the tmpfs removed" web " --tmpfs /tmp:rw,noexec,nosuid,size=64m" "" "lacks: --tmpfs"
+gen_case "--entrypoint" web "$img" " --entrypoint /bin/sh$img" "flag '--entrypoint'"
+gen_case "--group-add keep-groups for the website" web "$img" " --group-add=keep-groups$img" "--group-add 'keep-groups' is not allowed here"
+gen_case "--add-host" web "$img" " --add-host x:127.0.0.1$img" "flag '--add-host'"
+gen_case "--env LD_PRELOAD" web "$img" " --env LD_PRELOAD=/x.so$img" "environment variable LD_PRELOAD is not allowed"
+gen_case "the CMS mounts the podman socket" cms " --publish 127.0.0.1:1337:1337" " -v /run/podman/podman.sock:/s --publish 127.0.0.1:1337:1337" "the mount '/run/podman/podman.sock:/s'"
+gen_case "the CMS mounts ClamAV read-write" cms "-v /run/clamav:/run/clamav:ro" "-v /run/clamav:/run/clamav" "the mount '/run/clamav:/run/clamav'"
+
 rc=0
 bash "$infra/verify.sh" >"$work/verify-after-mutations.txt" 2>&1 || rc=$?
 yes_if "after the changes are undone verify.sh is clean again" test "$rc" -eq 0
+
+# --------------------------------------------------------------------------------------
+section "a missing website file is recreated with the CMS's secret, and the CMS file is left alone"
+cp -p /etc/oc/staging.web.env "$work/staging.web.env.orig"
+cms_hash_before=$(sha256sum /etc/oc/staging.env)
+rm -f /etc/oc/staging.web.env
+rc=0
+run_logged "$work/bootstrap-recreate.log" bash "$infra/bootstrap.sh" >/dev/null || rc=$?
+yes_if "bootstrap exits 0 with the website file missing" test "$rc" -eq 0
+yes_if "the website file is back, 0640 root:oc-staging" bash -c "[[ \$(stat -c '%a %U %G' /etc/oc/staging.web.env) == '640 root oc-staging' ]]"
+yes_if "it holds the same secret as the CMS file" shared_match
+yes_if "the CMS file was not touched" test "$(sha256sum /etc/oc/staging.env)" = "$cms_hash_before"
+yes_if "the recreated file has the same content as the original" cmp -s "$work/staging.web.env.orig" /etc/oc/staging.web.env
+yes_if "the run reported what it changed (and nothing about secret values)" bash -c "grep -q 'changed: created /etc/oc/staging.web.env (values not shown)' '$work/bootstrap-recreate.log'"
+mv -f "$work/staging.web.env.orig" /etc/oc/staging.web.env
 
 # --------------------------------------------------------------------------------------
 section "a certificate installed by the owner is kept, accepted, and ends the warning"
