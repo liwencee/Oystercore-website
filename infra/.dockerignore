@@ -1,0 +1,5 @@
+# Real settings and keys never go into an image.
+server.env
+keys/
+*.pub
+*.key

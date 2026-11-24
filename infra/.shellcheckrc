@@ -1,0 +1,5 @@
+# Lets `shellcheck infra/bootstrap.sh infra/verify.sh infra/lib/*.sh ...` follow the
+# `source` lines. CI and infra/test/run.sh pass the same options explicitly.
+shell=bash
+external-sources=true
+source-path=SCRIPTDIR
