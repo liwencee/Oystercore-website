@@ -30,10 +30,12 @@ PodmanArgs=--memory=512m --memory-swap=512m
 PidsLimit=256
 Environment=NODE_OPTIONS=--max-old-space-size=384
 
-# Secrets arrive as an environment file (root:oc-@@ENV@@, mode 0640), never in the image or
-# on a command line. These three override the file: inside the container the app listens on
-# all interfaces of its private network, and reaches the CMS by its container name there.
-EnvironmentFile=/etc/oc/@@ENV@@.env
+# The website's own environment file (root:oc-@@ENV@@, mode 0640), never in the image or on a
+# command line. It holds only what the website needs; the CMS's secrets (database password,
+# JWT secrets, file master key) are in a different file that this container never sees.
+# These three repeat the file's values: inside the container the app listens on all
+# interfaces of its private network, and reaches the CMS by its container name there.
+EnvironmentFile=/etc/oc/@@ENV@@.web.env
 Environment=HOST=0.0.0.0
 Environment=PORT=@@INTERNAL_PORT@@
 Environment=OC_CMS_URL=http://oc-cms-@@ENV@@:@@CMS_INTERNAL_PORT@@

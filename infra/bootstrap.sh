@@ -122,7 +122,7 @@ main() {
   done
   users_ensure_dirs
   for i in "${OC_ENV_LIST[@]}"; do
-    users_ensure_env_file "$i"
+    users_ensure_env_files "$i"
   done
 
   oc_step "rootless Podman for each environment"
