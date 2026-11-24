@@ -1,0 +1,16 @@
+# Managed by infra/bootstrap.sh. Started weekly by oc-cloudflare-ips.timer.
+# Fetches Cloudflare's published address ranges, checks them, then updates the firewall
+# (ports 80 and 443) and Nginx's trusted-proxy list. A bad download changes nothing.
+[Unit]
+Description=Refresh Cloudflare's address ranges (firewall and Nginx real IP)
+Documentation=man:ufw(8)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/oc-cloudflare-ips
+TimeoutStartSec=300
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectHome=yes

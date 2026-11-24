@@ -1,0 +1,72 @@
+# Managed by infra/bootstrap.sh, rendered from infra/quadlet/oc-cms.container.template into
+# the environment user's ~/.config/containers/systemd/. Do not edit by hand.
+# Podman's Quadlet generator turns it into the user service oc-cms-@@ENV@@.
+#
+# Task 4's deploy script changes exactly one thing here: the Image= line. The bootstrap
+# keeps whatever tag is there when it is run again.
+[Unit]
+Description=OysterCore CMS (Strapi), environment @@ENV@@
+
+[Container]
+ContainerName=oc-cms-@@ENV@@
+Image=localhost/oc-cms:bootstrap
+
+# Who the process is: the environment's own unprivileged host user, with the same ids inside,
+# so files in /var/lib/oc/@@ENV@@ keep their owner. Never root.
+UserNS=keep-id
+User=@@UID@@
+Group=@@GID@@
+# Keeps the host user's supplementary groups, so the process can reach the ClamAV socket
+# (group oc-clamd). Works with crun. (Podman 4.9 has no GroupAdd= key, so it goes in as an argument.)
+PodmanArgs=--group-add=keep-groups
+
+# The sandbox: a read-only root, no capabilities, no way to gain privileges, a small /tmp.
+ReadOnly=true
+DropCapability=ALL
+NoNewPrivileges=true
+Tmpfs=/tmp:rw,noexec,nosuid,size=64m
+
+# Limits, so one runaway app cannot starve the others (memory budget: about 1 GB each).
+# (Podman 4.9 has no Memory= key, so the memory limit goes in as an argument. Swap equal to the
+# limit means no swap.)
+PodmanArgs=--memory=1536m --memory-swap=1536m
+PidsLimit=512
+Environment=NODE_OPTIONS=--max-old-space-size=1024
+
+# Secrets arrive as an environment file (root:oc-@@ENV@@, mode 0640), never in the image or
+# on a command line. These three override the file: inside the container the app listens on
+# all interfaces of its private network, and reaches MariaDB and ClamAV through the sockets.
+EnvironmentFile=/etc/oc/@@ENV@@.env
+Environment=HOST=0.0.0.0
+Environment=PORT=@@INTERNAL_PORT@@
+Environment=DATABASE_SOCKET_PATH=@@MARIADB_SOCKET@@
+Environment=OC_CLAMD_SOCKET=@@CLAMD_SOCKET@@
+
+# The private network of this environment (oc-@@ENV@@.network), and the one door out: the
+# app's port, published on this machine's loopback only. Nginx is the only way in.
+Network=oc-@@ENV@@.network
+PublishPort=127.0.0.1:@@HOST_PORT@@:@@INTERNAL_PORT@@
+
+# The only writable place is this environment's data folder. The two sockets are read-only
+# mounts of their folders (a socket is usable through a read-only mount, and a folder keeps
+# working when the service behind it restarts). No container socket is mounted anywhere.
+Volume=/var/lib/oc/@@ENV@@:/var/lib/oc/@@ENV@@
+Volume=@@MARIADB_RUN_DIR@@:@@MARIADB_RUN_DIR@@:ro
+Volume=@@CLAMD_RUN_DIR@@:@@CLAMD_RUN_DIR@@:ro
+
+# A distroless image has no curl and no shell, so the image carries its own check, run
+# without a shell. The path is fixed by the image (Task 3b).
+HealthCmd=["/nodejs/bin/node","/app/healthcheck.mjs"]
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=90s
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target
