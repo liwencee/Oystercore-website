@@ -58,15 +58,19 @@ RUN mkdir -p apps/cms/public/uploads \
 #
 # Then what the image must not contain is removed (spec 10.9):
 #  - the files a dependency ships that are tests, and any .git, .cache or .env* entry;
-#  - esbuild's native binary. esbuild is a build tool that Strapi's admin build pulls in; the app
-#    never starts it at run time. The Go standard library inside the old 0.25.12 binary carries
-#    26 HIGH and CRITICAL advisories (Trivy), so the binary is left out instead of ignored.
+#  - esbuild's native binary, which is in two places (the platform package, and a copy that
+#    esbuild's install script puts over its own bin/esbuild). esbuild is a build tool that
+#    Strapi's admin build pulls in; the app never starts it at run time. The Go standard
+#    library inside the old 0.25.12 binary carries 26 HIGH and CRITICAL advisories (Trivy), so
+#    the binary is left out instead of ignored.
 # infra/images/verify-image.sh and the Trivy scan check the result.
 RUN pnpm --filter @oc/cms deploy --prod /home/node/app \
     && find /home/node/app/node_modules \
         \( -name .git -o -name .cache -o -name '.env*' -o -name '*.test.*' -o -name '*.spec.*' \) \
         -prune -exec rm -rf '{}' + \
-    && find /home/node/app/node_modules -path '*/node_modules/@esbuild/*/bin/esbuild' -type f -delete
+    && find /home/node/app/node_modules \
+        \( -path '*/node_modules/@esbuild/*/bin/esbuild' -o -path '*/node_modules/esbuild/bin/esbuild' \) \
+        -type f -delete
 
 # ---- final stage -----------------------------------------------------------------------
 FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:f991e86a080567b6ab7c3392e36f7a0a4f9300639e526b48ee81b92d523af62e AS final
