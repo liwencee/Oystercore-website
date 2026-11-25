@@ -1,9 +1,9 @@
 # OysterCore Group platform: design
 
-**Date:** 23 November 2026 (revision 4: Hostinger VPS; no monthly cost to the client; review answers Q1 to Q3 added)
+**Date:** 23 November 2026 (revision 5: container images; revision 4: Hostinger VPS; no monthly cost to the client; review answers Q1 to Q3 added)
 **Client:** OysterCore Group (Package Three, Ecosystem)
 **Built by:** Slatech Solution Limited
-**Status:** revision 4 approved by Slatech on 23 November 2026 (revisions 1 to 3 were approved earlier that day; revision 4 moves the hosting from managed Node.js hosting to a Hostinger VPS). The client has signed the PRD (told by Slatech on 23 November), so the PRD is now the baseline and wording changes go through PRD §16.
+**Status:** revision 5 follows Slatech's instruction of 23 November 2026 to build minimal, distroless, non-root images (revisions 1 to 4 were approved earlier that day; revision 4 moved the hosting from managed Node.js hosting to a Hostinger VPS). The client has signed the PRD (told by Slatech on 23 November), so the PRD is now the baseline and wording changes go through PRD §16.
 
 Requirement IDs (CMS-01, PRC-05, and so on) refer to the client PRD, `OYSTERCORE_PRD.pdf`, reference OCG/WEB/2026-021-PRD v1.0, 9 November 2026. Copies are in `Desktop\Claude\` and `Documents\Oystercore\`. The PRD is the scope. This document says how that scope gets built. Where the two disagree, the PRD wins, unless this document says it is changing the PRD and why.
 
@@ -61,6 +61,7 @@ The prototype gives the look. Everything in it is placeholder: copy is in [brack
   - **Server:** Ubuntu 24.04 LTS, root access, one server for both environments. Hostinger's KVM 2 (2 vCPU, 8 GB RAM, 100 GB NVMe, weekly backups included) is the minimum that fits (§5). The specs and prices come from Hostinger's pages and are checked again at order.
   - **We own the server.** Hardening, patching and monitoring are part of this design (§10.9) and of the handover (O11).
   - **No managed-hosting limits.** Background jobs, long requests, WebSockets and files on disk are all allowed.
+- **Containers (decided by Slatech, 23 November):** the Node apps are built into images on a minimal, distroless base and run as a non-root user. MariaDB, ClamAV and Nginx stay on the host as packages.
 - **Database:** MariaDB 11.4 LTS, installed on the VPS and reachable only from the server itself. It is the version Strapi 5 recommends. The `mysql2` driver.
 - **Cost (decided by Slatech):** no monthly cost to the client. The VPS is paid by Slatech on a 24-month term (O2). Outside services are used only on free tiers, and §6 lists what happens if a limit is reached.
 - **The "dedicated server" promise.** The PRD (§4.1, §8 Availability, §10) promises a dedicated server with guaranteed, unshared resources. A KVM VPS has its own guaranteed vCPU and RAM, but it is still a virtual server. See O1.
@@ -128,14 +129,21 @@ Browsers upload and download files through `/transfer/*` with signed, short-live
 
 | Environment | Hosts | Git branch | systemd services | Database | Data folder |
 |---|---|---|---|---|---|
-| Production | `www.<domain>`, `cms.<domain>` | `main` | `oc-web@prod`, `oc-cms@prod` | `oc_prod` | `/var/lib/oc/prod/` |
-| Staging | `staging.<domain>`, `cms-staging.<domain>` | `staging` | `oc-web@staging`, `oc-cms@staging` | `oc_staging` | `/var/lib/oc/staging/` |
+| Production | `www.<domain>`, `cms.<domain>` | `main` | `oc-web-prod`, `oc-cms-prod` | `oc_prod` | `/var/lib/oc/prod/` |
+| Staging | `staging.<domain>`, `cms-staging.<domain>` | `staging` | `oc-web-staging`, `oc-cms-staging` | `oc_staging` | `/var/lib/oc/staging/` |
 
 `/var/lib/oc` sits outside the folders that deploys replace, and Nginx never serves it. Each environment's user can read only its own folder and database.
 
-**Who runs what (Claude's call).** systemd runs the four Node apps, each as its own unprivileged user with sandboxing (§10.9). Docker isn't used in production: fewer moving parts, and no group that is effectively root. MariaDB comes from MariaDB's official 11.4 repository and ClamAV from Ubuntu's packages. The apps are built in CI, never on the server, so the server needs no compiler and no build memory.
+**Who runs what.** The four Node apps run as containers (decided by Slatech, 23 November). How they run is Claude's call.
+- **Images.** CI builds one image per app from a multi-stage Dockerfile. The final stage is Google's distroless Node 22 image (`gcr.io/distroless/nodejs22-debian12:nonroot`, or its newest successor), pinned by digest. It has no shell, no package manager and no root user, and it holds only the app's production files. The Node inside must be 22.23.4 or newer, and CI checks it. The build stage uses the smallest normal Node image that can build the app (the slim variant, pinned by digest) and runs as a non-root user too. A build needs a shell and package tools, so only the final image is distroless. Nothing from the build stage reaches the final image except the built app.
+- **Runtime.** Rootless Podman, run under each environment's own unprivileged host user and managed by systemd through Quadlet `.container` files. There is no daemon and no `docker` group, so nothing on the server is effectively root on the apps' behalf. Containers run as the environment's user (`--userns=keep-id`), so files in `/var/lib/oc/<env>` keep that ownership.
+- **Container limits.** Read-only root filesystem, all capabilities dropped, `no-new-privileges`, a small tmpfs for `/tmp`, memory and process limits, ports published on localhost only, and no container socket mounted anywhere. Only `/var/lib/oc/<env>` is writable.
+- **Health checks.** A distroless image has no `curl`, so each image carries a tiny Node script that checks its own health endpoint, and the Quadlet file runs it.
+- **Networking (builder's call).** Either a private network with MariaDB and ClamAV reached through mounted unix sockets, or host networking with the limits above. Prefer the private network if the baseline shows it works.
+- **Still on the host, as packages:** MariaDB from MariaDB's official 11.4 repository, and ClamAV and Nginx from Ubuntu.
+- **Why a container at all.** The first revision ran the apps as plain systemd services. Containers pin the exact Node and every library the app runs with, and a distroless image leaves an attacker nothing to run if they get in. The cost is more moving parts, which is why the baseline phase proves the whole path before anything else is built on it.
 
-**Deploys (Claude's call).** A push to `staging` deploys to staging. A push to `main` deploys to production after a manual approval in GitHub. GitHub Actions builds and tests, then uploads the release over SSH as a restricted deploy user whose key can run only one forced command, `deploy-release`. That command unpacks the release into `/opt/oc/<env>/releases/<commit>`, switches the `current` symlink, restarts the services, waits for the health checks (`/healthz` and `/_health`), and switches back by itself if they fail. The deploy key can't open a shell or touch anything else.
+**Deploys (Claude's call).** A push to `staging` deploys to staging. A push to `main` deploys to production after a manual approval in GitHub. GitHub Actions builds and tests, builds the two images, checks them (§10.9), and ships them over SSH as a restricted deploy user whose key can run only one forced command, `deploy-release`. The images travel as a tarball, so no registry login lives on the server. That command loads the images, checks their IDs against the ones CI sent, points the environment's Quadlet files at the new tag, restarts the services, waits for the health checks (`/healthz` and `/_health`), and switches back to the previous tag by itself if they fail. The server keeps the last three tags. The deploy key can't open a shell or touch anything else.
 
 **What staging is for (decided by Slatech, 23 November).** Staging tests *code, design and new templates* before they reach the live site. It does not move content.
 - **Content is checked as a draft on the live site.** An editor saves a draft, opens the preview button in the admin, and then publishes or schedules it. The preview shows the draft on `www.<domain>` (§12).
@@ -147,7 +155,7 @@ Browsers upload and download files through `/transfer/*` with signed, short-live
 - `apps/web`: the Astro front end.
 - `apps/cms`: Strapi.
 - `packages/shared`: zod schemas for every form, design tokens, generated Strapi types, the time and status rules in §8, and the file-check rules in §10.4.
-- `infra/`: the server setup as scripts: bootstrap and hardening, systemd units, Nginx configuration and a verification script (§10.9).
+- `infra/`: the server setup as scripts: bootstrap and hardening, Quadlet container units, Nginx configuration, image checks and a verification script (§10.9). Each app has a `Dockerfile` in its folder.
 
 CI builds each app into a self-contained release. The server never builds anything.
 
@@ -407,7 +415,7 @@ It's append-only at the API level and goes into the nightly backup.
   - The CMS serves the same folder at `cms.<domain>/media/*`, so the admin's thumbnails load.
 - **Private uploads:** `/var/lib/oc/<env>/private/`. This holds bids, vendor documents, CVs, quote attachments and investor-only documents.
   - **Every file is encrypted at rest** with AES-256-GCM, in chunks.
-  - Each file gets its own random data key. That key is wrapped by a master key held only in the environment's secret file (`/etc/oc/<env>.env`, readable by root and that environment's service user only).
+  - Each file gets its own random data key. That key is wrapped by a master key held only in the CMS's secret file (`/etc/oc/<env>.env`, readable by root and that environment's service user only). The website container never receives it: it loads its own, much smaller file (`/etc/oc/<env>.web.env`).
   - So a file copied off the disk, or taken from a snapshot or a backup, is unreadable on its own. Someone with root on the server could still read the key, which is why access to the server is locked down (§10.9).
   - Only Strapi decrypts files.
 
@@ -509,7 +517,7 @@ The route then saves the submission to Strapi, together with the version of the 
 ### 10.7 Supply chain and secrets
 
 **Secrets**
-- Secrets are kept only in `/etc/oc/<env>.env` on the server (readable by root and that environment's service user, and loaded by systemd) and in GitHub's encrypted secrets, with a separate set for each environment. The only secret in GitHub is the restricted deploy key.
+- Secrets are kept only on the server, in two files per environment: `/etc/oc/<env>.env` for the CMS (database password, Strapi secrets, the file master key) and `/etc/oc/<env>.web.env` for the website (only what the website needs: the CMS address and API token, the one shared secret it sends to the CMS, the media folder, the site URL and the CSP mode). Both are readable by root and that environment's service user, and passed to the containers as environment files. They also live in GitHub's encrypted secrets, with a separate set for each environment; the only secret in GitHub is the restricted deploy key. The verifier checks that the website file holds none of the CMS-only keys.
 - The file master key and the backup public key are generated at setup.
 - The backup *private* key is never stored on the server. It's kept offline by two named people, one at Slatech and one at OysterCore.
 - A rotation runbook goes into the handbook. Rotating the file master key re-wraps the data keys; files aren't re-encrypted.
@@ -557,9 +565,10 @@ The aim is a server that is boring to attack. `infra/` holds the setup as script
 - Kernel and network hardening through sysctl, unused services off, and auditd rules for logins, sudo and changes to `/etc/oc`.
 - Lynis runs after setup and monthly. The hardening index and its warnings go in the handbook.
 
-**Services**
-- Each Node app runs under systemd as its own unprivileged user, with `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict`, `ProtectHome`, a short list of writable paths, and a memory cap so one runaway app can't starve the others.
-- Secrets are files readable only by root and the service user. They are never in the repo or on a command line.
+**Services and images**
+- Each Node app runs as a rootless Podman container under its environment's own unprivileged user, as described in §5: read-only root filesystem, all capabilities dropped, `no-new-privileges`, a memory cap and a process limit so one runaway app can't starve the others.
+- **The images are minimal and non-root by test, not by promise.** CI fails the build unless each image: runs as a non-root user; has no shell (`/bin/sh` can't be started); reports Node 22.23.4 or newer; contains no `.env` file, `.git` folder or test files; and has no HIGH or CRITICAL vulnerability that has a fix (Trivy, free). Every stage of every Dockerfile also sets a non-root `USER` before it runs any build command, checked by hadolint and a script. Base images are pinned by digest and rebuilt weekly, so security fixes arrive even when the code doesn't change.
+- Secrets are files readable only by root and the service user, passed to the container as an environment file. They are never in an image, in the repo or on a command line.
 
 Backups and recovery are in §11.
 
@@ -655,7 +664,7 @@ Public HTML is cached at Cloudflare for 60 seconds, with stale-while-revalidate.
 **Phase 0: server baseline (2 to 3 days).** On the real Hostinger VPS, set up and prove each of these. Most are a script run and a check, so this phase carries less risk than a hosting go/no-go.
 1. Order the VPS (KVM 2, Ubuntu 24.04 LTS, 24-month term, data centre per O4). Put the test hostnames behind Cloudflare.
 2. Run the `infra` bootstrap and `infra/verify`. Every item in §10.9 passes. Record the Lynis hardening index.
-3. Install and record the versions of Node (22.23.4 or newer), MariaDB 11.4, ClamAV and Nginx.
+3. Install and record the versions of Podman, MariaDB 11.4, ClamAV and Nginx. The Node version inside each image is recorded when CI builds it (22.23.4 or newer).
 4. Deploy the Strapi and Astro skeletons to the staging hostnames through the real pipeline (§5). Both health checks answer, and a deliberately broken release rolls back by itself.
 5. Files: a file written under `/var/lib/oc/<env>` survives a redeploy and is not web-served. The web app's user can read the media folder. ClamAV rejects the EICAR test string.
 6. Cloudflare Free sits in front of the hostnames. A request straight to the server's IP is refused. Access protects the admin and staging.
@@ -749,7 +758,7 @@ These are the builder's calls:
 - Folder layout inside each app.
 - Component library and naming.
 - Test structure.
-- The exact Cloudflare rules, firewall rules, Nginx configuration and systemd sandboxing options.
+- The exact Cloudflare rules, firewall rules, Nginx configuration, Dockerfile layout and Podman and Quadlet options.
 - The CSP host list.
 - Where Turnstile sits on each form.
 - Email templates.
