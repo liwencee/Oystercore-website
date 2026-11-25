@@ -27,6 +27,9 @@ source "$OC_INFRA_DIR/lib/users.sh"
 source "$OC_INFRA_DIR/lib/packages.sh"
 
 VERIFY_CONTAINER=${VERIFY_CONTAINER:-0}
+# The awk the Nginx tokenizer and the Quadlet normaliser run under. The tests run both parsers
+# under gawk and mawk and compare; a server uses Ubuntu's default (mawk).
+AWK=${OC_AWK:-awk}
 CUR=""
 
 pass() { printf 'PASS %s %s\n' "$CUR" "$*"; }
@@ -78,24 +81,47 @@ sshd_val() { awk -v k="$1" '$1 == k {$1 = ""; sub(/^ /, ""); v = (v == "" ? $0 :
 
 # nginx_servers: reads `nginx -T` and prints one line per server block, then one summary line:
 #   S|names|ssl|default|reject|verify_client|client_certificate|ssl_protocols
-#   T|ssl_listens_in_servers|listens_outside_servers|ssl_listens_outside_servers|unbalanced
-# It tokenises the text the way Nginx does (words, quotes, ; { }), so a server block counts
-# however it is laid out: "server {" alone on a line, the whole block on one line, or the
-# "{" on the next line. A server is TLS if a listen has ssl or quic, or it says "ssl on".
-# Only directives written directly in the server block count, not those in locations.
+#   T|ssl_listens_in_servers|listens_outside_servers|ssl_listens_outside_servers|unreadable
+# It is a port of Nginx's own tokenizer (ngx_conf_read_token), because a reader that differs
+# from Nginx in one rule can be made to skip a server. The rules that matter:
+#   - a quote or # is special only at the START of a word ("a'b" is one word; so is a#b);
+#   - } closes a block only at the start of a word (in "a}" the } is part of the word);
+#   - after $ a { is just part of the word (${a is a word that ends at the next space or ;);
+#   - \ keeps the next character in the word, and "\"", "\'", "\\", \t, \r, \n are unescaped;
+#   - a quoted word must be followed by a space, ; or { (anything else is an error), except
+#     that a ) after it is the first character of the next word;
+#   - a word ends at a space, ; or {.
+# A server is TLS if a listen has ssl or quic, or it says "ssl on". Only directives written
+# directly in the server block count, not those in locations. "unreadable" is 1 when the text
+# is not something Nginx itself would accept (unbalanced braces, an open quote, a ; with no
+# directive, ...), and NET-03 then fails.
 NGINX_AWK=""
 read -r -d '' NGINX_AWK <<'AWK' || true
-function endword() {
-  if (haveword) { w[nw++] = word }
-  word = ""; haveword = 0
+function isws(c) { return c == " " || c == "\t" || c == "\r" || c == "\n" }
+function unescape(s,   out, i, n, c, d) {
+  out = ""; n = length(s); i = 1
+  while (i <= n) {
+    c = substr(s, i, 1)
+    if (c == "\\" && i < n) {
+      d = substr(s, i + 1, 1)
+      if (d == "\"" || d == "'" || d == "\\") { out = out d; i += 2; continue }
+      if (d == "t") { out = out "\t"; i += 2; continue }
+      if (d == "r") { out = out "\r"; i += 2; continue }
+      if (d == "n") { out = out "\n"; i += 2; continue }
+    }
+    out = out c
+    i++
+  }
+  return out
 }
+function word_end() { w[nw++] = unescape(raw); raw = "" }
 function join(from,   i, r) {
   r = ""
   for (i = from; i < nw; i++) r = (r == "" ? w[i] : r " " w[i])
   return r
 }
+function reset_state() { lastspace = 1; need_space = 0; variable = 0; dq = 0; sq = 0; quoted = 0; raw = "" }
 function directive(   name, i, has_ssl, has_def) {
-  if (nw == 0) return
   name = w[0]
   if (name == "listen") {
     has_ssl = 0; has_def = 0
@@ -129,52 +155,82 @@ function open_block() {
   }
 }
 function close_block() {
-  if (depth <= 0) { unbalanced = 1; return }
+  if (depth <= 0) { bad = 1; return }
   if (srv > 0 && depth == srv) {
     print "S|" s_names "|" s_ssl "|" s_def "|" s_rej "|" s_ver "|" s_cc "|" s_proto
     srv = 0
   }
   depth--
 }
-function stmt_end(kind) {
-  endword()
-  if (kind == ";") directive()
-  else if (kind == "{") open_block()
-  else close_block()
+# A statement ends at ; or { . With no words in it, Nginx refuses the file.
+function stmt(kind) {
+  if (nw == 0) bad = 1
+  else if (kind == ";") directive()
+  else open_block()
   nw = 0
 }
+function feed(c) {
+  if (c == "\n" && sharp) sharp = 0
+  if (sharp) return
+  if (quoted) { quoted = 0; raw = raw c; return }
+  if (need_space) {
+    if (isws(c)) { lastspace = 1; need_space = 0; return }
+    if (c == ";" || c == "{") { stmt(c); reset_state(); return }
+    # Nginx treats a ) here as the end of the quoted word AND the first character of the next
+    # word (it falls through to the start-of-word code below); anything else is an error.
+    if (c == ")") { lastspace = 1; need_space = 0 } else { bad = 1; return }
+  }
+  if (lastspace) {
+    if (isws(c)) return
+    if (c == ";" || c == "{") { stmt(c); reset_state(); return }
+    if (c == "}") { if (nw != 0) bad = 1; nw = 0; close_block(); reset_state(); return }
+    if (c == "#") { sharp = 1; return }
+    lastspace = 0; raw = ""
+    if (c == "\\") { quoted = 1; raw = "\\"; return }
+    if (c == "\"") { dq = 1; return }
+    if (c == "'") { sq = 1; return }
+    if (c == "$") { variable = 1; raw = "$"; return }
+    raw = c
+    return
+  }
+  if (c == "{" && variable) { raw = raw c; return }
+  variable = 0
+  if (c == "\\") { quoted = 1; raw = raw c; return }
+  if (c == "$") { variable = 1; raw = raw c; return }
+  if (dq) { if (c == "\"") { dq = 0; need_space = 1; word_end() } else raw = raw c; return }
+  if (sq) { if (c == "'") { sq = 0; need_space = 1; word_end() } else raw = raw c; return }
+  if (isws(c) || c == ";" || c == "{") {
+    lastspace = 1; word_end()
+    if (c == ";" || c == "{") { stmt(c); reset_state() }
+    return
+  }
+  raw = raw c
+}
+BEGIN { reset_state() }
 {
   n = length($0)
-  for (i = 1; i <= n; i++) {
-    c = substr($0, i, 1)
-    if (inq != "") {
-      if (c == "\\") { word = word c substr($0, i + 1, 1); i++; continue }
-      if (c == inq) { inq = ""; continue }
-      word = word c
-      continue
-    }
-    if (c == "#" && !haveword) break
-    if (c == "'" || c == "\"") { inq = c; haveword = 1; continue }
-    if (c == "$" && substr($0, i + 1, 1) == "{") {
-      j = index(substr($0, i), "}")
-      if (j > 0) { word = word substr($0, i, j); haveword = 1; i += j - 1; continue }
-    }
-    if (c == "\\") { word = word c substr($0, i + 1, 1); haveword = 1; i++; continue }
-    if (c == " " || c == "\t" || c == "\r") { endword(); continue }
-    if (c == ";") { stmt_end(";"); continue }
-    if (c == "{") { stmt_end("{"); continue }
-    if (c == "}") { stmt_end("}"); continue }
-    word = word c
-    haveword = 1
-  }
-  if (inq == "") endword()
+  for (i = 1; i <= n; i++) feed(substr($0, i, 1))
+  feed("\n")
 }
 END {
-  if (depth != 0 || inq != "") unbalanced = 1
-  print "T|" (srv_ssl_listens + 0) "|" (orphan + 0) "|" (orphan_ssl + 0) "|" (unbalanced + 0)
+  if (depth != 0 || nw != 0 || dq || sq || quoted || !lastspace) bad = 1
+  print "T|" (srv_ssl_listens + 0) "|" (orphan + 0) "|" (orphan_ssl + 0) "|" (bad + 0)
 }
 AWK
-nginx_servers() { awk "$NGINX_AWK"; }
+nginx_servers() { "$AWK" "$NGINX_AWK"; }
+
+# The same facts a second way, by plain text search: every "listen ... ;" statement, how many
+# of them have ssl or quic (quoted or not), and how many contain a quote at all. NET-03 needs
+# the parser and this count to agree, and refuses a configuration with a quote in a listen.
+nginx_listen_stmts() {
+  printf '%s\n' "$1" | sed 's/[[:space:]]*#.*$//' | grep -oE '(^|[;{}[:space:]])listen[[:space:]][^;]*;' || true
+}
+nginx_tls_listen_count() {
+  nginx_listen_stmts "$1" | grep -cE "[[:space:]][\"']?(ssl|quic)[\"']?([[:space:];]|\$)" || true
+}
+nginx_quoted_listen_count() {
+  nginx_listen_stmts "$1" | grep -c "[\"']" || true
+}
 
 # --- SSH ---------------------------------------------------------------------------
 need_sshd() {
@@ -341,9 +397,7 @@ check_net_02() {
   pass "ports 80 and 443 are open only to the $n Cloudflare ranges; SSH is the only other open port"
 }
 
-# nginx_tls_problems: what the parsed Nginx configuration says is wrong with TLS handling.
-# Prints one problem per line (nothing if all is well), and the TLS server count as the last
-# line "COUNT n". Shared by NET-03 and NGX-01.
+# nginx_parse_summary: the counts from the T| line of nginx_servers (used by NET-03).
 nginx_parse_summary() {
   # Sets: NS_UNBALANCED NS_ORPHAN_SSL NS_PARSED_SSL, from the T| line.
   local t
@@ -352,7 +406,7 @@ nginx_parse_summary() {
 }
 
 check_net_03() {
-  local line type names ssl rej ver cc proto n=0 bad="" name tested=0 code indep
+  local line type names ssl rej ver cc proto n=0 bad="" name tested=0 code indep quoted
   local NS_PARSED_SSL=0 NS_ORPHAN_SSL=0 NS_UNBALANCED=0
   if [[ -z $NGINX_SERVERS ]]; then
     fail "cannot read the Nginx configuration (is nginx installed and does nginx -T pass?)"
@@ -366,9 +420,9 @@ check_net_03() {
   [[ ${NS_ORPHAN_SSL:-0} == 0 ]] || bad+=" [${NS_ORPHAN_SSL} TLS listen directive(s) outside any server block]"
   # A second, independent count of the "listen ... ssl" statements in the text. The parser
   # and this count must agree, so a layout the parser does not understand cannot hide a site.
-  indep=$(printf '%s\n' "$NGINX_T" | sed 's/[[:space:]]*#.*$//' |
-    grep -oE '(^|[;{}[:space:]])listen[[:space:]][^;]*;' |
-    grep -cE '[[:space:]](ssl|quic)([[:space:];]|$)' || true)
+  indep=$(nginx_tls_listen_count "$NGINX_T")
+  quoted=$(nginx_quoted_listen_count "$NGINX_T")
+  [[ $quoted -eq 0 ]] || bad+=" [$quoted listen statement(s) contain a quote character, which this check does not interpret]"
   if [[ $indep -ne $((NS_PARSED_SSL + NS_ORPHAN_SSL)) ]]; then
     bad+=" [the configuration has $indep TLS listen statements but the parser accounted for $((NS_PARSED_SSL + NS_ORPHAN_SSL))]"
   fi
@@ -682,24 +736,40 @@ check_os_08() {
 
 # qnorm FILE: a Quadlet (systemd-style) file as "section US key US value" records (US is the
 # character 0x1f). It reads the syntax the way systemd does, so tampering cannot hide in a
-# spelling the checks do not expect: spaces around the key and the =, lines joined by a
-# trailing backslash, comment lines (# and ;) skipped. A line that is not a section, a comment
-# or key=value gets an empty key, which the checks reject.
+# spelling the checks do not expect: spaces or tabs around the key and the =, comment lines
+# (# and ;) skipped. A comment line is recognised BEFORE anything else, and a backslash at its
+# end does not continue it; only a Key=value line can be continued by a trailing backslash
+# (the lines are joined with a space). Where parsers differ in the rest (a comment line that
+# ends in a backslash, a comment inside a continued line, a continuation on a line that is not
+# Key=value), the line is not guessed at: it becomes a record with an empty key, which the
+# checks reject. The file then fails instead of being read one way here and another way by
+# Podman. Every other line is read the same by both.
 qnorm() {
-  awk '
+  # shellcheck disable=SC2016  # an awk program: the $ signs are awk's, not the shell's
+  "$AWK" '
     function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+    function odd(msg) { print section "\037\037" msg }
     function emit(line,   t, eq) {
       t = trim(line)
-      if (t == "" || t ~ /^[#;]/) return
+      if (t == "") return
       if (t ~ /^\[.*\]$/) { section = substr(t, 2, length(t) - 2); return }
       eq = index(t, "=")
-      if (eq == 0) { print section "\037\037" t; return }
+      if (eq == 0) { odd(t); return }
       print section "\037" trim(substr(t, 1, eq - 1)) "\037" trim(substr(t, eq + 1))
     }
     {
       line = $0; sub(/\r$/, "", line)
-      if (pending != "") { line = pending " " line; pending = "" }
-      if (line ~ /\\$/) { sub(/\\$/, "", line); pending = line; next }
+      t = trim(line)
+      if (t ~ /^[#;]/) {
+        if (t ~ /\\$/) odd("a comment line ends with a backslash")
+        if (pending != "") odd("a comment line inside a continued line")
+        next
+      }
+      if (pending != "") { line = pending " " line; pending = ""; t = trim(line) }
+      if (line ~ /\\$/) {
+        if (t ~ /^\[/ || index(t, "=") == 0) { odd("a line that is not Key=value ends with a backslash"); next }
+        sub(/\\$/, "", line); pending = line; next
+      }
       emit(line)
     }
     END { if (pending != "") emit(pending) }
@@ -987,8 +1057,74 @@ q_check_dir() {
   fi
 }
 
+# q_check_units ENV GEN: one problem per line about the units Podman's Quadlet generator
+# produced (GEN is its dry-run output). Exactly three units may come out of the three files:
+# the network, and one service per container. In each container service the ONLY Exec lines
+# are one ExecStart (the podman run command, checked flag by flag) and the generator's own
+# ExecStop and ExecStopPost "podman rm" forms, exactly. Any other Exec key (ExecStartPre,
+# ExecStartPost, ExecReload, ExecCondition, Exec=, a second ExecStart, ...), and any "podman
+# run" or "podman create" anywhere but the one ExecStart, is refused: those would run a second
+# container that the flag check never sees.
+q_check_units() {
+  local env=$1 gen=$2 kind a b c block role key val expected n
+  local -A seen=() starts=()
+  expected="oc-cms-$env.service oc-web-$env.service oc-$env-network.service"
+  # shellcheck disable=SC2016  # the awk program at the end of this loop: its $ signs are awk's, not the shell's
+  while IFS="$Q_US" read -r kind a b c; do
+    case $kind in
+      B)
+        word_in "$expected" "$a" || echo "the generator produced an unexpected unit '$a'"
+        seen[$a]=1
+        ;;
+      E)
+        block=$a key=$b val=$c
+        case $block in
+          "oc-$env-network.service")
+            if [[ $key != ExecStart || $val != "/usr/bin/podman network create --ignore oc-$env" ]]; then
+              echo "$block: $key=${val:0:60} is not the generator's own network command"
+            fi
+            starts[$block]=$((${starts[$block]:-0} + 1))
+            ;;
+          "oc-cms-$env.service" | "oc-web-$env.service")
+            role=${block#oc-}
+            role=${role%%-*}
+            case $key in
+              ExecStart)
+                starts[$block]=$((${starts[$block]:-0} + 1))
+                while IFS= read -r n; do
+                  [[ -n $n ]] && echo "$block: $n"
+                done < <(q_check_generated "$env" "$role" "ExecStart=$val")
+                ;;
+              ExecStop) [[ $val == "/usr/bin/podman rm -v -f -i --cidfile=%t/%N.cid" ]] || echo "$block: ExecStop=${val:0:60} is not the generator's own podman rm" ;;
+              ExecStopPost) [[ $val == "-/usr/bin/podman rm -v -f -i --cidfile=%t/%N.cid" ]] || echo "$block: ExecStopPost=${val:0:60} is not the generator's own podman rm" ;;
+              *) echo "$block: the generated unit has $key=, which is not allowed" ;;
+            esac
+            ;;
+          *) echo "$block: an Exec line ($key) in a unit that should not have one" ;;
+        esac
+        ;;
+      R) echo "$a: 'podman run' or 'podman create' outside ExecStart: ${b:0:60}" ;;
+      *) ;;
+    esac
+  done < <(printf '%s\n' "$gen" | "$AWK" '
+    /^---.*---$/ { block = substr($0, 4, length($0) - 6); print "B\037" block; next }
+    /^[ \t]*Exec[A-Za-z]*[ \t]*=/ {
+      s = $0; sub(/^[ \t]+/, "", s); i = index(s, "=")
+      k = substr(s, 1, i - 1); sub(/[ \t]+$/, "", k)
+      v = substr(s, i + 1); sub(/^[ \t]+/, "", v)
+      print "E\037" block "\037" k "\037" v; next
+    }
+    /^[ \t]*[#;]/ { next }
+    /podman.*[ \t](run|create)([ \t]|$)/ { print "R\037" block "\037" $0 }
+  ')
+  for block in $expected; do
+    [[ -n ${seen[$block]:-} ]] || echo "the generator produced no $block"
+    [[ ${starts[$block]:-0} -eq 1 ]] || echo "$block has ${starts[$block]:-0} ExecStart lines (exactly one is needed)"
+  done
+}
+
 check_ctr_01() {
-  local env role f qdir p bad="" n=0 gen line rc problems ex
+  local env role f qdir p bad="" n=0 gen rc problems
   for env in "${OC_ENV_LIST[@]}"; do
     qdir=$(oc_env_quadlet_dir "$env")
     if [[ ! -d $qdir ]]; then
@@ -1018,22 +1154,9 @@ check_ctr_01() {
       if [[ $rc -ne 0 || -n $problems ]]; then
         bad+=" [oc-$env: the Quadlet generator rejects the files: ${problems:0:120}]"
       else
-        while IFS= read -r line; do
-          [[ $line == Exec*=* ]] || continue
-          ex=${line#*=}
-          ex=${ex#-}
-          [[ $ex == '/usr/bin/podman '* ]] || bad+=" [oc-$env: the generated units run '${ex:0:50}', not podman]"
-        done <<<"$gen"
-        for role in cms web; do
-          line=$(awk -v s="---oc-$role-$env.service---" '$0 == s {f = 1; next} /^---.*---$/ {f = 0} f && /^ExecStart=/ {print; exit}' <<<"$gen")
-          if [[ -z $line ]]; then
-            bad+=" [oc-$role-$env: the generator produced no service]"
-            continue
-          fi
-          while IFS= read -r p; do
-            [[ -n $p ]] && bad+=" [oc-$role-$env generated: $p]"
-          done < <(q_check_generated "$env" "$role" "$line")
-        done
+        while IFS= read -r p; do
+          [[ -n $p ]] && bad+=" [oc-$env generated: $p]"
+        done < <(q_check_units "$env" "$gen")
       fi
     else
       bad+=" [the Podman Quadlet generator (/usr/libexec/podman/quadlet) is missing]"
