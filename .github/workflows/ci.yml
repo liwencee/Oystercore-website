@@ -3,6 +3,12 @@ name: CI
 on:
   push:
   pull_request:
+  # Every Monday, so that security fixes in the base images, in dependencies and in the
+  # advisory databases reach us even when no code changes (spec 10.9). The whole workflow runs,
+  # not only the images job: new advisories also change `pnpm audit`, and the infra job
+  # installs the current packages.
+  schedule:
+    - cron: '23 4 * * 1'
 
 permissions:
   contents: read
@@ -81,3 +87,92 @@ jobs:
 
       - name: Bootstrap, verify and idempotence
         run: bash infra/test/run.sh
+
+  # The app images: minimal and non-root by test, not by promise (spec 10.9). Every step below
+  # fails the job. The cms image is started against the MariaDB service, so this job has its own.
+  # Third-party tools run as containers pinned by digest (hadolint, Trivy) and the build uses
+  # the Buildx that GitHub's runner already has, so the only action here is checkout, pinned to
+  # a full commit SHA (v7.0.1).
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      # Same host port as docker-compose.dev.yml. The verifier reaches it as host.docker.internal:3307.
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: oc_ci_root
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      HADOLINT: hadolint/hadolint@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e # v2.14.0
+      TRIVY: aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb # 0.76.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # DL3002 (the last USER must not be root) is an error here, on top of hadolint's defaults.
+      - name: Lint the Dockerfiles (hadolint)
+        run: |
+          for dockerfile in apps/web/Dockerfile apps/cms/Dockerfile; do
+            echo "::group::hadolint $dockerfile"
+            docker run --rm -i "$HADOLINT" hadolint --error DL3002 --failure-threshold info - < "$dockerfile"
+            echo "::endgroup::"
+          done
+
+      # hadolint only looks at the last USER of a file. This looks at every stage: each must
+      # set a non-root USER before its first RUN. Its own test runs first.
+      - name: Every stage runs as non-root before its first RUN
+        run: |
+          bash infra/images/check-dockerfile-users.test.sh
+          bash infra/images/check-dockerfile-users.sh apps/web/Dockerfile apps/cms/Dockerfile
+
+      # No .env, key, database or git history can enter a build, even by a careless COPY.
+      - name: Test .dockerignore
+        run: bash infra/images/dockerignore.test.sh
+
+      # --provenance=false: a plain single-image result, with no attestation manifests beside it,
+      # which is what Task 4 will save and load on the server.
+      - name: Build the images (Buildx)
+        run: |
+          docker buildx version
+          docker buildx build --load --provenance=false --file apps/web/Dockerfile --tag oc-web:ci .
+          docker buildx build --load --provenance=false --file apps/cms/Dockerfile --tag oc-cms:ci .
+
+      # The verifier is tested first, on images that are right and wrong in known ways.
+      - name: Test the image verifier
+        run: bash infra/images/verify-image.test.sh
+
+      - name: Verify the images (non-root, no shell, Node version, no forbidden files, size, read-only start)
+        env:
+          # The MariaDB service's root password, above. The verifier makes a throwaway database
+          # and user for the cms and drops them again; the cms itself never sees this password.
+          OC_VERIFY_DB_PASSWORD: oc_ci_root
+        run: |
+          bash infra/images/verify-image.sh oc-web:ci
+          bash infra/images/verify-image.sh oc-cms:ci
+
+      # HIGH and CRITICAL findings that have a fix fail the job. .trivyignore lists the few
+      # temporary exceptions, each by exact id with its reason. The images go in as tarballs,
+      # so no container gets the Docker socket.
+      - name: Scan the images (Trivy)
+        run: |
+          mkdir -p trivy-work
+          for app in web cms; do
+            docker save "oc-$app:ci" --output "trivy-work/oc-$app.tar"
+            echo "::group::trivy oc-$app"
+            docker run --rm \
+              --volume "$PWD/trivy-work:/work:ro" \
+              --volume "$PWD/.trivyignore:/.trivyignore:ro" \
+              "$TRIVY" image \
+              --input "/work/oc-$app.tar" \
+              --ignorefile /.trivyignore \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --exit-code 1
+            echo "::endgroup::"
+          done
