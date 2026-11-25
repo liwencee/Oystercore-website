@@ -348,8 +348,8 @@ expect "verify.sh is clean again" bash -c "bash '$infra/verify.sh' | grep -q '^S
 # --------------------------------------------------------------------------------------
 section "the verifier notices breakage (each change is made, checked, and undone)"
 # mutation ID DESCRIPTION APPLY REVERT: verify.sh must print FAIL <ID> while the change is in place.
-mutation() { # ID DESCRIPTION APPLY REVERT [TEXT THAT MUST BE IN THE FAIL LINE]
-  local id=$1 desc=$2 apply=$3 revert=$4 expect=${5:-} out line
+mutation() { # ID DESCRIPTION APPLY REVERT [TEXT THAT MUST BE IN THE FAIL LINE [A SECOND TEXT THAT MUST ALSO BE IN IT]]
+  local id=$1 desc=$2 apply=$3 revert=$4 expect=${5:-} expect2=${6:-} out line
   bash -c "$apply"
   out=$(bash "$infra/verify.sh" 2>&1 || true)
   bash -c "$revert"
@@ -359,8 +359,11 @@ mutation() { # ID DESCRIPTION APPLY REVERT [TEXT THAT MUST BE IN THE FAIL LINE]
   elif [[ -n $expect && $line != *"$expect"* ]]; then
     notok "$id fails when $desc, but not for the expected reason (wanted '$expect')"
     printf '         | %s\n' "${line:0:400}"
+  elif [[ -n $expect2 && $line != *"$expect2"* ]]; then
+    notok "$id fails when $desc, but not also for the second expected reason (wanted '$expect2')"
+    printf '         | %s\n' "${line:0:400}"
   else
-    ok "$id fails when $desc${expect:+ (because: $expect)}"
+    ok "$id fails when $desc${expect:+ (because: $expect${expect2:+; and: $expect2})}"
   fi
 }
 mutation SVC-02 "a secret file is world-readable" "chmod 0644 /etc/oc/prod.env" "chmod 0640 /etc/oc/prod.env"
@@ -517,6 +520,61 @@ bash "$infra/verify.sh" >"$work/verify-ngx-ok.txt" 2>&1 || true
 rm -f "$ngxdir/zz-test.conf"
 yes_if "a correct one-line TLS server is seen and accepted (NET-03 counts 5 TLS sites)" grep -q '^PASS NET-03 all 5 TLS sites' "$work/verify-ngx-ok.txt"
 
+# --- fix round 2 ---------------------------------------------------------------------------
+# The two parsers had rules different from the real ones. Nginx's tokenizer and Podman's file
+# parser are now followed exactly; each trick that got past them must fail for its reason.
+
+# Nginx: TLS servers without the client certificate, hidden by the rules the tokenizer used to get wrong.
+ngxsrv="$ngxdir/zz-test.conf"
+mutation NET-03 "a TLS server using a quoted \"ssl\" sits between servers whose add_header values hold a quote mid-word (a'b ... c'd)" \
+  "printf \"server { listen 8460; add_header X a'b; server_name a.example.test; }\nserver { listen 8443 \\\"ssl\\\"; server_name q.example.test; $tls }\nserver { listen 8461; add_header Y c'd; server_name c.example.test; }\n\" >$ngxsrv" \
+  "rm -f $ngxsrv" "q.example.test: ssl_verify_client ''" "contain a quote character"
+mutation NET-03 "a TLS server using a quoted \"ssl\" follows 'default_type \${a;' (a \${ in a value) and a '}' ends a word in the next server" \
+  "printf 'server { default_type \${a; listen 8444 \"ssl\"; server_name b.example.test; $tls }\nserver { listen 8462; return 200 a}; server_name n.example.test; }\n' >$ngxsrv" \
+  "rm -f $ngxsrv" "b.example.test: ssl_verify_client ''" "contain a quote character"
+mutation NET-03 "a plain TLS server sits between servers whose add_header values hold a quote mid-word" \
+  "printf \"server { listen 8463; add_header X a'b; server_name p.example.test; }\nserver { listen 8445 ssl; server_name m.example.test; $tls }\nserver { listen 8464; add_header Y c'd; server_name r.example.test; }\n\" >$ngxsrv" \
+  "rm -f $ngxsrv" "m.example.test: ssl_verify_client ''"
+mutation NET-03 "a TLS server follows a '\${' in a value (default_type \${a;)" \
+  "printf 'server { default_type \${a; listen 8446 ssl; server_name v.example.test; $tls }\n' >$ngxsrv" \
+  "rm -f $ngxsrv" "v.example.test: ssl_verify_client ''"
+mutation NET-03 "a TLS server follows a '}' inside a word (add_header X a}b;)" \
+  "printf 'server { add_header X a}b; listen 8447 ssl; server_name w.example.test; $tls }\n' >$ngxsrv" \
+  "rm -f $ngxsrv" "w.example.test: ssl_verify_client ''"
+mutation NET-03 "a TLS server has a double-quoted \"ssl\" in its listen and no client certificate" \
+  "printf 'server { listen 8448 \"ssl\"; server_name x.example.test; $tls }\n' >$ngxsrv" \
+  "rm -f $ngxsrv" "x.example.test: ssl_verify_client ''" "contain a quote character"
+mutation NET-03 "a TLS server has a '#' in the middle of a word before its listen (add_header X a#b;)" \
+  "printf 'server { add_header X a#b; listen 8449 ssl; server_name y.example.test; $tls }\n' >$ngxsrv" \
+  "rm -f $ngxsrv" "y.example.test: ssl_verify_client ''"
+
+# Quadlet: a comment line that ends in a backslash must not swallow the line after it.
+# qinsert DESCRIPTION FILE SECTION EXPECTED-REASON LINE...: put the lines right after the
+# section header, and say why CTR-01 must fail. (@BS@ in a line stands for a backslash.)
+qinsert() {
+  local desc=$1 file=$2 sec=$3 why=$4 base line
+  shift 4
+  base=$(basename "$file")
+  : >"$qbak/insert.txt"
+  for line in "$@"; do
+    printf '%s\n' "${line//@BS@/\\}" >>"$qbak/insert.txt"
+  done
+  mutation CTR-01 "$desc" \
+    "cp -p $file $qbak/$base && awk -v sec='[$sec]' 'FNR == NR {ins[++n] = \$0; next} {print} \$0 == sec {for (i = 1; i <= n; i++) print ins[i]}' $qbak/insert.txt $qbak/$base >$qbak/insert.new && cat $qbak/insert.new >$file" \
+    "mv -f $qbak/$base $file" "$why" "a comment line ends with a backslash"
+}
+qinsert "a '; ... \\' comment line comes before PodmanArgs=--privileged" "$qweb" Container "PodmanArgs has '--privileged'" \
+  '; note @BS@' 'PodmanArgs=--privileged'
+qinsert "a '# ... \\' comment line comes before PodmanArgs=--privileged" "$qweb" Container "PodmanArgs has '--privileged'" \
+  '# note @BS@' 'PodmanArgs=--privileged'
+qinsert "a comment line ending in a backslash comes before [Service] ExecStartPre=/usr/bin/podman run --privileged -v /:/host" "$qweb" Service "key ExecStartPre in [Service] is not allowed" \
+  '; note @BS@' 'ExecStartPre=/usr/bin/podman run -d --privileged -v /:/host x'
+qinsert "a comment line ending in a backslash comes before PodmanArgs=--read-only=false" "$qweb" Container "PodmanArgs has '--read-only=false'" \
+  '; note @BS@' 'PodmanArgs=--read-only=false'
+qinsert "a comment line ending in a backslash comes before PodmanArgs=--privileged in the CMS file" "$qcms" Container "PodmanArgs has '--privileged'" \
+  '# note @BS@' 'PodmanArgs=--privileged'
+
+
 # --- VERIFY_CONTAINER=1 on a real host must not quietly skip the live checks ---
 realhost_made=0
 if [[ ! -d /run/systemd/system ]]; then
@@ -604,9 +662,74 @@ gen_case "--env LD_PRELOAD" web "$img" " --env LD_PRELOAD=/x.so$img" "environmen
 gen_case "the CMS mounts the podman socket" cms " --publish 127.0.0.1:1337:1337" " -v /run/podman/podman.sock:/s --publish 127.0.0.1:1337:1337" "the mount '/run/podman/podman.sock:/s'"
 gen_case "the CMS mounts ClamAV read-write" cms "-v /run/clamav:/run/clamav:ro" "-v /run/clamav:/run/clamav" "the mount '/run/clamav:/run/clamav'"
 
+# The generated units: only the one ExecStart (checked flag by flag) and the generator's own
+# podman rm in ExecStop and ExecStopPost may run anything. Crafted copies of the real output.
+gen_prod=$(QUADLET_UNIT_DIRS=/home/oc-prod/.config/containers/systemd "$quadlet" -dryrun -user 2>&1)
+units_problems() { # GENERATED-OUTPUT: what q_check_units says about it
+  OC_TEST_GEN=$1 bash -c 'source "$1/verify.sh"; q_check_units prod "$OC_TEST_GEN"' _ "$infra"
+}
+# after_line BLOCK PATTERN EXTRA: the real output with EXTRA added after the first line of BLOCK matching PATTERN
+after_line() { printf '%s\n' "$gen_prod" | awk -v b="---$1---" -v p="$2" -v x="$3" '$0 == b {f = 1} f && !d && $0 ~ p {print; print x; d = 1; next} {print}'; }
+# replace_line BLOCK PATTERN NEW: the real output with that line replaced (NEW empty: removed)
+replace_line() { printf '%s\n' "$gen_prod" | awk -v b="---$1---" -v p="$2" -v x="$3" '$0 == b {f = 1} f && !d && $0 ~ p {if (x != "") print x; d = 1; next} {print}'; }
+unit_case() { # DESCRIPTION EDITED-OUTPUT EXPECTED-REASON
+  local problems
+  problems=$(units_problems "$2")
+  if [[ -z $problems ]]; then
+    notok "the generated-unit check misses: $1"
+  elif [[ $problems != *"$3"* ]]; then
+    notok "the generated-unit check flags '$1' but not for the expected reason (wanted '$3')"
+    printf '         | %s\n' "${problems:0:300}"
+  else
+    ok "the generated-unit check flags: $1"
+  fi
+}
+yes_if "the real generated units have no problem (positive control)" test -z "$(units_problems "$gen_prod")"
+prun='/usr/bin/podman run -d --privileged -v /:/host localhost/oc-web:x'
+unit_case "an ExecStartPre that runs podman run --privileged" "$(after_line oc-web-prod.service '^ExecStop=' "ExecStartPre=$prun")" "has ExecStartPre=, which is not allowed"
+unit_case "an ExecStartPost that runs podman run" "$(after_line oc-web-prod.service '^ExecStop=' "ExecStartPost=$prun")" "has ExecStartPost=, which is not allowed"
+unit_case "an ExecReload that runs podman create" "$(after_line oc-web-prod.service '^ExecStop=' 'ExecReload=/usr/bin/podman create -v /:/host x')" "has ExecReload=, which is not allowed"
+unit_case "an ExecCondition" "$(after_line oc-web-prod.service '^ExecStop=' 'ExecCondition=/bin/true')" "has ExecCondition=, which is not allowed"
+unit_case "an Exec= key" "$(after_line oc-web-prod.service '^ExecStop=' 'Exec=/bin/sh')" "has Exec=, which is not allowed"
+unit_case "a second ExecStart" "$(after_line oc-web-prod.service '^ExecStop=' "ExecStart=$prun")" "has 2 ExecStart lines"
+unit_case "ExecStop replaced by a podman run" "$(replace_line oc-web-prod.service '^ExecStop=' "ExecStop=$prun")" "ExecStop=/usr/bin/podman run"
+unit_case "ExecStop with extra podman rm arguments" "$(replace_line oc-web-prod.service '^ExecStop=' 'ExecStop=/usr/bin/podman rm -v -f -i --cidfile=%t/%N.cid -v /:/host')" "is not the generator's own podman rm"
+unit_case "ExecStopPost with a second command after a ;" "$(replace_line oc-web-prod.service '^ExecStopPost=' "ExecStopPost=-/usr/bin/podman rm -v -f -i --cidfile=%t/%N.cid ; $prun")" "ExecStopPost=-/usr/bin/podman rm"
+unit_case "ExecStopPost replaced by podman create" "$(replace_line oc-web-prod.service '^ExecStopPost=' 'ExecStopPost=/usr/bin/podman create -v /:/host x')" "is not the generator's own podman rm"
+unit_case "podman run in a [Service] Environment line" "$(after_line oc-web-prod.service '^ExecStop=' "Environment=X=$prun")" "outside ExecStart"
+unit_case "podman create in an Environment= line" "$(after_line oc-web-prod.service '^ExecStop=' 'Environment=X=/usr/bin/podman create -v /:/host x')" "outside ExecStart"
+unit_case "a made-up Exec key (ExecStopPostX=)" "$(after_line oc-web-prod.service '^ExecStop=' 'ExecStopPostX=/usr/bin/podman create -v /:/host x')" "has ExecStopPostX=, which is not allowed"
+unit_case "an Exec line with spaces around the = (ExecStartPre = podman run)" "$(after_line oc-web-prod.service '^ExecStop=' "  ExecStartPre = $prun")" "has ExecStartPre=, which is not allowed"
+unit_case "podman run with a global option before it (podman --log-level=debug run)" "$(after_line oc-web-prod.service '^ExecStop=' "Environment=X=/usr/bin/podman --log-level=debug run -d x")" "outside ExecStart"
+unit_case "no ExecStart at all in a container unit" "$(replace_line oc-web-prod.service '^ExecStart=' '')" "has 0 ExecStart lines"
+unit_case "an ExecStart that is not podman run" "$(replace_line oc-cms-prod.service '^ExecStart=' 'ExecStart=/bin/sh -c x')" "the generated command is not /usr/bin/podman run"
+unit_case "a podman create in place of the podman run" "$(replace_line oc-cms-prod.service '^ExecStart=' 'ExecStart=/usr/bin/podman create --name=x localhost/oc-cms:x')" "the generated command is not /usr/bin/podman run"
+unit_case "the network unit runs something else" "$(replace_line oc-prod-network.service '^ExecStart=' 'ExecStart=/usr/bin/podman run -d --privileged x')" "is not the generator's own network command"
+unit_case "the network unit gets an ExecStartPre" "$(after_line oc-prod-network.service '^ExecStart=' 'ExecStartPre=/usr/bin/podman run -d --privileged x')" "is not the generator's own network command"
+unit_case "an extra unit appears" "$(printf '%s\n---evil.service---\n[Service]\nExecStart=%s\n' "$gen_prod" "$prun")" "unexpected unit 'evil.service'"
+unit_case "an extra unit appears with an Exec line" "$(printf '%s\n---evil.service---\n[Service]\nExecStart=%s\n' "$gen_prod" "$prun")" "in a unit that should not have one"
+
+
 rc=0
 bash "$infra/verify.sh" >"$work/verify-after-mutations.txt" 2>&1 || rc=$?
 yes_if "after the changes are undone verify.sh is clean again" test "$rc" -eq 0
+
+# --------------------------------------------------------------------------------------
+section "the two hand-written parsers, under gawk and under the default awk (mawk), on the same cases"
+parser_mawk="$work/parser-mawk.txt"
+parser_gawk="$work/parser-gawk.txt"
+rc=0
+bash "$infra/test/parser-cases.sh" mawk nginx >"$parser_mawk" 2>"$work/parser-mawk.err" || rc=$?
+yes_if "every case is answered correctly under mawk, and Nginx itself accepts every case that is meant to be valid" test "$rc" -eq 0
+rc=0
+bash "$infra/test/parser-cases.sh" gawk nginx >"$parser_gawk" 2>"$work/parser-gawk.err" || rc=$?
+yes_if "every case is answered correctly under gawk, and Nginx itself accepts every case that is meant to be valid" test "$rc" -eq 0
+yes_if "gawk and mawk print byte-for-byte identical output on every case" cmp -s "$parser_mawk" "$parser_gawk"
+yes_if "the default awk of this image is mawk" bash -c "[[ \$(readlink -f \"\$(command -v awk)\") == */mawk ]]"
+cat "$parser_mawk"
+printf '(%s nginx cases, %s count cases, %s qnorm cases; the same lines under gawk)\n' \
+  "$(grep -c '^== nginx' "$parser_mawk")" "$(grep -c '^== counts' "$parser_mawk")" "$(grep -c '^== qnorm' "$parser_mawk")"
+
 
 # --------------------------------------------------------------------------------------
 section "a missing website file is recreated with the CMS's secret, and the CMS file is left alone"

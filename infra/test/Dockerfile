@@ -9,12 +9,16 @@
 # step is tested too, and Podman's own Quadlet generator checks the container files.
 # `systemd` is here only for `systemd-analyze verify`; `python3-minimal` only runs the
 # small fake backends of the Nginx test (the real apps are containers).
+# `gawk` is here only so the tests can run the verifier's two awk parsers under both gawk and
+# Ubuntu's default awk (mawk); installing gawk would make it the default, so the awk
+# alternative is put back to mawk, as on a server (which does not have gawk).
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg openssl iproute2 openssh-client shellcheck systemd python3-minimal \
+        ca-certificates curl gnupg openssl iproute2 openssh-client shellcheck systemd python3-minimal gawk \
+    && update-alternatives --set awk /usr/bin/mawk \
     && rm -rf /var/lib/apt/lists/*
 
 # The build context is infra/ (see infra/test/run.sh).
