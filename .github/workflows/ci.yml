@@ -3,10 +3,14 @@ name: CI
 on:
   push:
   pull_request:
-  # Every Monday, so that security fixes in the base images, in dependencies and in the
-  # advisory databases reach us even when no code changes (spec 10.9). The whole workflow runs,
-  # not only the images job: new advisories also change `pnpm audit`, and the infra job
-  # installs the current packages.
+  # Every Monday, so that a newly published advisory is noticed even when no code changes
+  # (spec 10.9). This run changes nothing by itself: the base images and the dependencies are
+  # pinned (by digest and by lockfile), so it rebuilds the same bytes. What it does is re-scan:
+  # Trivy fails the images job when a vulnerability that has a fix is in a pinned base image,
+  # and `pnpm audit` fails the ci job for a new dependency advisory. Renovate (renovate.json)
+  # then opens the pull request that bumps the digest or the dependency, and the fix arrives
+  # only when a person merges it. The whole workflow runs, not only the images job; the infra
+  # job installs the current packages.
   schedule:
     - cron: '23 4 * * 1'
 

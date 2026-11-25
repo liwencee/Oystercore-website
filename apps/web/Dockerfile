@@ -8,8 +8,11 @@
 # is Google's distroless Node 22: no shell, no package manager, no root user. Only the built
 # app and its production dependencies are copied across.
 #
-# Both base images are pinned by digest. The tag is only a label for people; the digest decides.
-# CI rebuilds weekly and Renovate proposes new digests, so security fixes arrive.
+# Both base images are pinned by digest. The tag is only a label for people; the digest decides,
+# so a build never changes by itself. How a security fix reaches the base: the weekly CI run
+# re-scans these pinned digests with Trivy and fails when a vulnerability that has a fix is in
+# one of them; Renovate (renovate.json) then opens a pull request that bumps the digest; the base
+# changes only when a person merges that pull request.
 #   build stage: node:22-bookworm-slim, Node 22.23.5.
 #   final stage: distroless nodejs22 on Debian 13, Node 22.23.5. The Debian 12 variant
 #   (nodejs22-debian12) is still on Node 22.22.0, older than the 22.23.4 the spec requires.
