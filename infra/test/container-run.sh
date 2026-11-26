@@ -1043,7 +1043,7 @@ fi
 yes_if "end to end: it stopped after the checks, before changing anything (exit 1 or 6, not 2 or 5)" test "$rc" -eq 1 -o "$rc" -eq 6
 yes_if "end to end: the Quadlet files are unchanged" test "$(sha256sum "$qweb" "$qcms" | sha256sum)" = "$qsum_before"
 yes_if "end to end: the spool folder is empty again afterwards" bash -c "[[ -z \$(ls -A /var/lib/oc-deploy/spool | grep -v '^.lock\$') ]]"
-yes_if "end to end: sudo's own log records the one command, run as root, by the deploy user" bash -c "grep -q 'oc-deploy : .*USER=root ; COMMAND=/usr/local/lib/oc/deploy/apply-release.sh prod $dsha ' /var/log/sudo.log"
+yes_if "end to end: sudo's own log records the one command, run as root, by the deploy user" bash -c "tr '\n' ' ' </var/log/sudo.log | tr -s ' ' | grep -q 'oc-deploy : .*USER=root ; COMMAND=/usr/local/lib/oc/deploy/apply-release.sh prod $dsha '"
 # sudo itself, called by the deploy user directly
 expect_fail_because "sudo refuses anything but the one script: a root shell" "a password is required" runuser -u oc-deploy -- sudo -n -i true
 expect_fail_because "sudo refuses the script with arguments of another shape (bad environment)" "a password is required" runuser -u oc-deploy -- sudo -n /usr/local/lib/oc/deploy/apply-release.sh dev "$dsha" "$did" "$did"
@@ -1094,10 +1094,9 @@ assert_with_fake_sshd() { # SED-EXPRESSION applied to the deploy user's answer
   bash -c '
     source "$1/lib/common.sh"; source "$1/lib/ssh.sh"
     oc_load_config "$OC_CONFIG"; oc_validate_config
-    real=$(/usr/sbin/sshd -T 2>/dev/null)
-    realdeploy=$(/usr/sbin/sshd -T -C "user=oc-deploy,host=x,addr=203.0.113.1" 2>/dev/null)
-    sshd() { # only -T and -T -C user=... are asked
-      if [[ $* == *"user=oc-deploy"* ]]; then printf "%s\n" "$realdeploy" | sed -E "$2"; else printf "%s\n" "$real"; fi
+    expr=$2
+    sshd() { # the real sshd, except that the deploy user's answer is edited
+      if [[ $* == *"user=oc-deploy"* ]]; then /usr/sbin/sshd "$@" | sed -E "$expr"; else /usr/sbin/sshd "$@"; fi
     }
     ssh_assert_effective
   ' _ "$infra" "$1"
@@ -1111,8 +1110,9 @@ expect_fail_because "ssh_assert_effective notices another forced command for the
 expect_fail_because "ssh_assert_effective notices a deploy user who is not in AllowUsers" "sshd would allow" bash -c '
   source "$1/lib/common.sh"; source "$1/lib/ssh.sh"
   oc_load_config "$OC_CONFIG"; oc_validate_config
-  real=$(/usr/sbin/sshd -T 2>/dev/null)
-  sshd() { printf "%s\n" "$real" | sed -E "s/^allowusers oc-deploy$//"; }
+  sshd() { # the real sshd, except that the global answer lists no oc-deploy in AllowUsers
+    if [[ $* == *"-C"* ]]; then /usr/sbin/sshd "$@"; else /usr/sbin/sshd "$@" | sed -E "s/^allowusers oc-deploy$//"; fi
+  }
   ssh_assert_effective' _ "$infra"
 
 # --------------------------------------------------------------------------------------

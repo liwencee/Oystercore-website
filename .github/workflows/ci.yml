@@ -75,11 +75,13 @@ jobs:
 
   # The server setup scripts, proved in a throwaway Ubuntu 24.04 container: shellcheck,
   # then bootstrap twice, verify, and check the second run changed nothing. It installs the
-  # real packages (MariaDB 11.4, Nginx, ClamAV, Podman), so it needs the internet and takes
-  # several minutes. No secret is involved: the test generates its own keys and settings.
+  # real packages (MariaDB 11.4, Nginx, ClamAV, Podman), so it needs the internet. It also makes
+  # about three hundred deliberate breakages and checks that each one is noticed, and runs the
+  # deploy scripts' unit tests, so it takes about half an hour (hence the 60-minute limit). No
+  # secret is involved: the test generates its own keys and settings.
   infra:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 

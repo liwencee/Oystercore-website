@@ -397,7 +397,7 @@ dep_expected_sudo_command() {
 }
 
 check_dep_01() {
-  local bad="" f st n line key rest a out entries cmds expect_cmd opts got
+  local bad="" f st n line key rest a out entries cmds expect_cmd opts got kf
   if [[ $OC_DEPLOY_ENABLED != yes ]]; then
     for f in "$OC_DEPLOY_SUDOERS" "$OC_DEPLOY_KEYS" "$OC_DEPLOY_FORCED" "$OC_DEPLOY_APPLY"; do
       if [[ -e $f || -L $f ]]; then bad+=" [$f is still there]"; fi
@@ -459,8 +459,16 @@ check_dep_01() {
         rest=${line#"$opts "}
         if [[ ! $rest =~ ^(ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-nistp(256|384|521)|ssh-rsa)\ [A-Za-z0-9+/=]+(\ oc-deploy-ci)?$ ]]; then
           bad+=" [after the options the key line is not '<key type> <key>' as the bootstrap writes it]"
-        elif ! ssh-keygen -l -f <(printf '%s\n' "$rest") >/dev/null 2>&1; then
-          bad+=" [the key in $OC_DEPLOY_KEYS does not parse]"
+        else
+          # ssh-keygen wants a real file, not a pipe
+          kf=$(mktemp) || kf=""
+          if [[ -z $kf ]]; then
+            bad+=" [cannot make a temporary file to parse the key]"
+          else
+            printf '%s\n' "$rest" >"$kf"
+            ssh-keygen -l -f "$kf" >/dev/null 2>&1 || bad+=" [the key in $OC_DEPLOY_KEYS does not parse]"
+            rm -f -- "$kf"
+          fi
         fi
         # the CI key must not also be an admin's key
         key=$(awk '{print $1 " " $2}' <<<"$rest")
