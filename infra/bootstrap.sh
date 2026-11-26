@@ -67,8 +67,16 @@ print_next_steps() {
     printf '[oc] 3. sudo asks for a password (OC_SUDO_PASSWORDLESS=no); each admin set one before this run.\n'
   fi
   printf '[oc] -  The app containers (oc-cms-<env>, oc-web-<env>) are defined but NOT started: there\n'
-  printf '[oc]    is no image yet. The first deploy loads the images and starts them; after that they\n'
-  printf '[oc]    start at boot. Their Quadlet files are in /home/oc-<env>/.config/containers/systemd/.\n'
+  printf '[oc]    is no image yet. Their Quadlet files say Pull=never and name the placeholder image\n'
+  printf '[oc]    localhost/oc-<app>:bootstrap, which does not exist, so the units FAIL at every boot (and\n'
+  printf '[oc]    on every start) until the first deploy loads the real images and points them at the new\n'
+  printf '[oc]    tag. That is expected. Their files are in /home/oc-<env>/.config/containers/systemd/.\n'
+  if [[ $OC_DEPLOY_ENABLED == yes ]]; then
+    printf '[oc] -  Deploys: the account %s may only run the forced command %s.\n' "$OC_DEPLOY_USER" "$OC_DEPLOY_FORCED"
+    printf '[oc]    Put these in GitHub (Settings, Secrets): DEPLOY_SSH_KEY (the PRIVATE half of the key whose\n'
+    printf '[oc]    public half is %s), DEPLOY_HOST, DEPLOY_SSH_PORT (%s) and DEPLOY_KNOWN_HOSTS (the output of\n' "$OC_DEPLOY_PUBKEY" "$OC_SSH_PORT"
+    printf '[oc]    ssh-keyscan -p %s <server address>, checked against the host key fingerprint you trust).\n' "$OC_SSH_PORT"
+  fi
   for step in "${OC_NEXT_STEPS[@]}"; do
     printf '[oc] -  %s\n' "$step"
   done
@@ -107,6 +115,7 @@ main() {
   for i in "${!OC_ADMIN_NAMES[@]}"; do
     oc_validate_pubkey "${OC_ADMIN_KEYS[$i]}"
   done
+  users_validate_deploy_key
   oc_log "domain $OC_DOMAIN, environments: ${OC_ENV_LIST[*]}, admins: ${OC_ADMIN_NAMES[*]}, SSH port $OC_SSH_PORT"
   if oc_container_mode; then
     oc_log "TEST CONTAINER MODE: files are written, kernel and systemd steps are skipped"
@@ -134,6 +143,9 @@ main() {
   oc_step "admins and sudo"
   users_ensure_admins
   users_ensure_sudo
+
+  oc_step "the deploy account (CI's one door in)"
+  users_ensure_deploy
 
   oc_step "MariaDB"
   svc_mariadb

@@ -44,7 +44,9 @@ users_ensure_env_user() {
 users_ensure_dirs() {
   local env
   oc_ensure_dir "$OC_DATA_ROOT" 0755 root root
-  oc_ensure_dir "$OC_SECRET_DIR" 0755 root root
+  # 0711: a user can reach a file in it by name (each environment's user reads its own env
+  # files) but cannot list it. Every file in it is 0640 root:oc-<env>.
+  oc_ensure_dir "$OC_SECRET_DIR" 0711 root root
   for env in "${OC_ENV_LIST[@]}"; do
     oc_ensure_dir "$OC_DATA_ROOT/$env" 0750 "oc-$env" "oc-$env"
     oc_ensure_dir "$OC_DATA_ROOT/$env/media" 0750 "oc-$env" "oc-$env"
@@ -271,5 +273,128 @@ EOF
   if [[ ! -e /var/log/sudo.log ]]; then
     install -m 0600 -o root -g root /dev/null /var/log/sudo.log
     oc_changed "created /var/log/sudo.log"
+  fi
+}
+
+# --- the deploy account ------------------------------------------------------------------
+# CI's one door into the server. It has no password, no shell of its own that anyone can reach
+# (sshd runs only the forced command), one sudoers rule, and nothing it can read or write but
+# its spool folder. See infra/deploy/ for what it runs.
+
+# users_pubkey_blob FILE: "type base64" of the first key line in FILE, without any comment.
+users_pubkey_blob() { awk '!/^[[:space:]]*(#|$)/ {print $1 " " $2; exit}' "$1"; }
+
+# users_validate_deploy_key: a plain public key (never private), and not an admin's key. If
+# the CI key were also an admin's key, whoever holds CI's secret could sign in as that admin.
+users_validate_deploy_key() {
+  local blob adm i
+  [[ $OC_DEPLOY_ENABLED == yes ]] || return 0
+  oc_validate_pubkey "$OC_DEPLOY_KEYFILE"
+  blob=$(users_pubkey_blob "$OC_DEPLOY_KEYFILE")
+  for i in "${!OC_ADMIN_KEYS[@]}"; do
+    adm=$(users_pubkey_blob "${OC_ADMIN_KEYS[$i]}")
+    [[ $blob != "$adm" ]] || oc_die "OC_DEPLOY_PUBKEY is the same key as the admin '${OC_ADMIN_NAMES[$i]}'. The deploy key must be its own key pair, kept only in GitHub's secrets."
+  done
+}
+
+# users_deploy_key_line: the one line of the deploy account's authorized_keys file. The forced
+# command and `restrict` (no pty, no forwarding, no agent, no X11, no user rc) come first;
+# the key is the configured one, with a fixed comment instead of whatever the file had.
+users_deploy_key_line() {
+  printf 'command="%s",restrict %s oc-deploy-ci' "$OC_DEPLOY_FORCED" "$(users_pubkey_blob "$OC_DEPLOY_KEYFILE")"
+}
+
+# The one sudoers rule. The arguments are a regular expression (sudo 1.9.10 and later: the
+# argument text starts with ^ and ends with $), so sudo itself refuses anything but the exact
+# shape deploy-release sends, and apply-release.sh checks the same patterns again. ':' is
+# escaped because sudoers uses it as a separator. No wildcard anywhere. env_reset and !setenv
+# mean the deploy account cannot pass environment variables through sudo.
+users_deploy_sudoers() {
+  cat <<EOF
+# Managed by infra/bootstrap.sh. The deploy account may run ONE script as root, with arguments
+# of exactly one shape (prod or staging, a 40-character commit, two sha256 image ids).
+Defaults:$OC_DEPLOY_USER env_reset, !setenv
+$OC_DEPLOY_USER ALL=(root) NOPASSWD: $OC_DEPLOY_APPLY ^(prod|staging) [0-9a-f]{40} sha256\:[0-9a-f]{64} sha256\:[0-9a-f]{64}\$
+EOF
+}
+
+users_ensure_deploy() {
+  local shell home status groups
+  if [[ $OC_DEPLOY_ENABLED != yes ]]; then
+    users_remove_deploy
+    return 0
+  fi
+  users_ensure_system_group "$OC_DEPLOY_USER"
+  if ! getent passwd "$OC_DEPLOY_USER" >/dev/null; then
+    useradd --system --gid "$OC_DEPLOY_USER" --home-dir "$OC_DEPLOY_HOME" --no-create-home \
+      --shell /bin/sh --comment "OysterCore deploy (forced command only)" -- "$OC_DEPLOY_USER"
+    oc_changed "created user $OC_DEPLOY_USER"
+  fi
+  [[ $(id -u -- "$OC_DEPLOY_USER") -lt 1000 && $(id -u -- "$OC_DEPLOY_USER") -ne 0 ]] || oc_die "$OC_DEPLOY_USER is not a system account"
+  home=$(getent passwd "$OC_DEPLOY_USER" | cut -d: -f6)
+  if [[ $home != "$OC_DEPLOY_HOME" ]]; then
+    usermod --home "$OC_DEPLOY_HOME" -- "$OC_DEPLOY_USER"
+    oc_changed "set the home of $OC_DEPLOY_USER to $OC_DEPLOY_HOME"
+  fi
+  # sshd runs a forced command through the account's shell (sh -c), so it needs one that can.
+  shell=$(getent passwd "$OC_DEPLOY_USER" | cut -d: -f7)
+  if [[ $shell != /bin/sh ]]; then
+    usermod --shell /bin/sh -- "$OC_DEPLOY_USER"
+    oc_changed "set the shell of $OC_DEPLOY_USER to /bin/sh"
+  fi
+  # No password (locked), and in no group but its own: no group may give it more.
+  status=$(getent shadow "$OC_DEPLOY_USER" | cut -d: -f2)
+  if [[ $status != '!'* && $status != '*'* ]]; then
+    passwd -l -- "$OC_DEPLOY_USER" >/dev/null
+    oc_changed "locked the password of $OC_DEPLOY_USER"
+  fi
+  groups=$(id -nG -- "$OC_DEPLOY_USER")
+  if [[ $groups != "$OC_DEPLOY_USER" ]]; then
+    usermod --groups "" -- "$OC_DEPLOY_USER"
+    oc_changed "removed $OC_DEPLOY_USER from every group but its own (was: $groups)"
+  fi
+
+  # Folders: the home is root's and cannot be written by the deploy account; the spool is the
+  # one place it can write (group oc-deploy), and only root can replace the folder itself.
+  oc_ensure_dir "$OC_DEPLOY_HOME" 0755 root root
+  oc_ensure_dir "$OC_DEPLOY_SPOOL" 0770 root "$OC_DEPLOY_USER"
+  oc_ensure_dir "$OC_RUNTIME_LIB_DIR" 0755 root root
+  oc_ensure_dir "$OC_DEPLOY_DIR" 0755 root root
+  # The scripts and the size limit, root-owned and not writable by anyone else.
+  oc_install_file "$OC_INFRA_DIR/deploy/deploy-release.sh" "$OC_DEPLOY_FORCED" 0755 root root
+  oc_install_file "$OC_INFRA_DIR/deploy/apply-release.sh" "$OC_DEPLOY_APPLY" 0755 root root
+  oc_install_stdin "$OC_DEPLOY_LIMITS" 0644 root root <<EOF
+# Managed by infra/bootstrap.sh (OC_DEPLOY_MAX_BYTES in server.env). Read by both deploy scripts.
+MAX_TARBALL_BYTES=$OC_DEPLOY_MAX_BYTES
+EOF
+  # The deploy key, in a root-owned file that only sshd's Match block for this user reads.
+  oc_install_stdin "$OC_DEPLOY_KEYS" 0644 root root <<<"$(users_deploy_key_line)"
+  # The one sudoers rule, checked by visudo before it is put in place.
+  users_deploy_sudoers | oc_install_stdin "$OC_DEPLOY_SUDOERS" 0440 root root visudo -c -f
+}
+
+# Deploy account switched off (OC_DEPLOY_ENABLED=no): nothing of it is left. Idempotent.
+users_remove_deploy() {
+  local f
+  for f in "$OC_DEPLOY_SUDOERS" "$OC_DEPLOY_KEYS" "$OC_DEPLOY_FORCED" "$OC_DEPLOY_APPLY" "$OC_DEPLOY_LIMITS"; do
+    if [[ -e $f || -L $f ]]; then
+      rm -f -- "$f"
+      oc_changed "removed $f"
+    fi
+  done
+  if [[ -d $OC_DEPLOY_DIR && ! -L $OC_DEPLOY_DIR ]] && rmdir -- "$OC_DEPLOY_DIR" 2>/dev/null; then
+    oc_changed "removed $OC_DEPLOY_DIR"
+  fi
+  if getent passwd "$OC_DEPLOY_USER" >/dev/null; then
+    userdel -- "$OC_DEPLOY_USER" >/dev/null 2>&1 || oc_die "could not remove the user $OC_DEPLOY_USER"
+    oc_changed "removed the user $OC_DEPLOY_USER"
+  fi
+  if getent group "$OC_DEPLOY_USER" >/dev/null; then
+    groupdel -- "$OC_DEPLOY_USER" >/dev/null 2>&1 || oc_die "could not remove the group $OC_DEPLOY_USER"
+    oc_changed "removed the group $OC_DEPLOY_USER"
+  fi
+  if [[ -d $OC_DEPLOY_HOME && ! -L $OC_DEPLOY_HOME ]]; then
+    rm -rf --one-file-system -- "$OC_DEPLOY_HOME"
+    oc_changed "removed $OC_DEPLOY_HOME"
   fi
 }

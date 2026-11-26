@@ -41,6 +41,20 @@ OC_SUBID_COUNT=65536
 OC_CMS_INTERNAL_PORT=1337
 OC_WEB_INTERNAL_PORT=4321
 OC_KNOWN_ENVS="prod staging"
+# The deploy account (spec 5 and 10.9): CI's one door into the server. Everything it can run is
+# root-owned: the forced command, and the script that one sudoers rule allows. Its home holds
+# nothing and it cannot write there; the spool folder is the only place it can write.
+OC_DEPLOY_USER=oc-deploy
+OC_DEPLOY_HOME=/var/lib/oc-deploy
+OC_DEPLOY_SPOOL=/var/lib/oc-deploy/spool
+OC_DEPLOY_DIR=/usr/local/lib/oc/deploy
+OC_DEPLOY_FORCED=/usr/local/lib/oc/deploy/deploy-release
+OC_DEPLOY_APPLY=/usr/local/lib/oc/deploy/apply-release.sh
+OC_DEPLOY_LIMITS=/usr/local/lib/oc/deploy/limits.conf
+# The deploy key lives in a root-owned file (sshd's Match block points AuthorizedKeysFile at
+# it), so the deploy account cannot add a key or change the forced command.
+OC_DEPLOY_KEYS=/etc/ssh/oc-deploy.authorized_keys
+OC_DEPLOY_SUDOERS=/etc/sudoers.d/92-oc-deploy
 # Services a web server has no use for. The bootstrap masks any that exist; verify.sh checks.
 OC_UNUSED_UNITS=(
   snapd.service snapd.socket snapd.seeded.service multipathd.service multipathd.socket
@@ -244,6 +258,10 @@ OC_TIMEZONE="Africa/Lagos"
 OC_ENVS="prod staging"
 OC_SUDO_PASSWORDLESS="yes"
 OC_SWAP_SIZE="2G"
+OC_DEPLOY_ENABLED="yes"
+OC_DEPLOY_PUBKEY=""
+OC_DEPLOY_MAX_BYTES="2147483648"
+OC_DEPLOY_KEYFILE=""
 OC_CONFIG_DIR=""
 OC_ENV_LIST=()
 OC_ADMIN_NAMES=()
@@ -270,7 +288,7 @@ oc_load_config() {
         val=${BASH_REMATCH[1]}
       fi
       case $key in
-        OC_DOMAIN | OC_ADMINS | OC_SSH_PORT | OC_TIMEZONE | OC_ENVS | OC_SUDO_PASSWORDLESS | OC_SWAP_SIZE)
+        OC_DOMAIN | OC_ADMINS | OC_SSH_PORT | OC_TIMEZONE | OC_ENVS | OC_SUDO_PASSWORDLESS | OC_SWAP_SIZE | OC_DEPLOY_ENABLED | OC_DEPLOY_PUBKEY | OC_DEPLOY_MAX_BYTES)
           printf -v "$key" '%s' "$val"
           ;;
         *) oc_die "$file line $n: unknown setting $key" ;;
@@ -309,6 +327,21 @@ oc_validate_config() {
   [[ $OC_TIMEZONE =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ ]] || oc_die "OC_TIMEZONE is not a valid zone name"
   [[ $OC_SUDO_PASSWORDLESS == yes || $OC_SUDO_PASSWORDLESS == no ]] || oc_die "OC_SUDO_PASSWORDLESS must be yes or no"
   [[ $OC_SWAP_SIZE =~ ^[1-9][0-9]*[MG]$ ]] || oc_die "OC_SWAP_SIZE must look like 2G or 1024M"
+  [[ $OC_DEPLOY_ENABLED == yes || $OC_DEPLOY_ENABLED == no ]] || oc_die "OC_DEPLOY_ENABLED must be yes or no"
+  # The largest image tarball the deploy account may upload: at least 1 MiB, at most 64 GiB.
+  [[ $OC_DEPLOY_MAX_BYTES =~ ^[1-9][0-9]{6,10}$ ]] ||
+    oc_die "OC_DEPLOY_MAX_BYTES must be a number of bytes between 1048576 (1 MiB) and 68719476736 (64 GiB)"
+  ((OC_DEPLOY_MAX_BYTES >= 1048576 && OC_DEPLOY_MAX_BYTES <= 68719476736)) ||
+    oc_die "OC_DEPLOY_MAX_BYTES must be a number of bytes between 1048576 (1 MiB) and 68719476736 (64 GiB)"
+  OC_DEPLOY_KEYFILE=""
+  if [[ $OC_DEPLOY_ENABLED == yes ]]; then
+    [[ -n $OC_DEPLOY_PUBKEY ]] ||
+      oc_die "OC_DEPLOY_ENABLED=yes needs OC_DEPLOY_PUBKEY=<path to the deploy public key (.pub)>. Create a key pair for CI (ssh-keygen -t ed25519), keep the private half in GitHub's secret DEPLOY_SSH_KEY, and give the .pub file here. Or set OC_DEPLOY_ENABLED=no."
+    OC_DEPLOY_KEYFILE=$OC_DEPLOY_PUBKEY
+    if [[ $OC_DEPLOY_KEYFILE != /* ]]; then
+      OC_DEPLOY_KEYFILE="$OC_CONFIG_DIR/$OC_DEPLOY_KEYFILE"
+    fi
+  fi
 
   read -r -a OC_ENV_LIST <<<"${OC_ENVS//,/ }"
   [[ ${#OC_ENV_LIST[@]} -gt 0 ]] || oc_die "OC_ENVS is empty"
