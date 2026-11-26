@@ -30,6 +30,7 @@ set -Eeuo pipefail
 export LC_ALL=C PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 umask 077
 unset BASH_ENV ENV CDPATH
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 
 # Exactly the shape CI sends; the same patterns as apply-release.sh.
 RE_COMMAND='^(prod|staging) [0-9a-f]{40} sha256:[0-9a-f]{64} sha256:[0-9a-f]{64}$'
@@ -90,7 +91,7 @@ main() {
   web_id=${words[3]}
 
   # --- the size limit: the same file apply-release.sh reads
-  conf=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/limits.conf
+  conf=$SCRIPT_DIR/limits.conf
   if [[ -f $conf && ! -L $conf ]]; then
     while IFS= read -r line || [[ -n $line ]]; do
       if [[ $line =~ ^MAX_TARBALL_BYTES=([0-9]{1,13})$ ]]; then

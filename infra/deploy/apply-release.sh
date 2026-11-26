@@ -43,6 +43,9 @@
 # Nothing here prints a secret: only tags, image ids and paths.
 # shellcheck shell=bash
 
+# Where this script lives (worked out now, before main changes directory).
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+
 RE_ENV='^(prod|staging)$'
 RE_SHA='^[0-9a-f]{40}$'
 RE_ID='^sha256:[0-9a-f]{64}$'
@@ -104,7 +107,7 @@ setup() {
 
   MAX_TARBALL=$DEFAULT_MAX_TARBALL_BYTES
   local conf line
-  conf=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/limits.conf
+  conf=$SCRIPT_DIR/limits.conf
   if [[ -f $conf && ! -L $conf ]]; then
     while IFS= read -r line || [[ -n $line ]]; do
       if [[ $line =~ ^MAX_TARBALL_BYTES=([0-9]{1,13})$ ]]; then
@@ -182,13 +185,16 @@ set_image() {
 
 # --- images -----------------------------------------------------------------------------
 norm_id() { printf '%s' "${1#sha256:}"; }
-list_images() { podman_run image ls --format '{{.Id}} {{.Created}} {{.Repository}}:{{.Tag}}'; }
-# snapshot ASSOC-NAME: the images by name, as "id" (bare hex), from a fresh listing.
-fill_names() { # LISTING NAME-OF-ASSOC-ARRAY
+# One line per tag: id|creation time|name. The id is bare hex. The creation time is Podman's
+# {{.CreatedAt}}, "2026-03-23 21:33:59 +0000 UTC", which sorts as text (Podman 4.9 prints
+# {{.Created}} as "8 months ago", so that field cannot be used).
+list_images() { podman_run image ls --format '{{.Id}}|{{.CreatedAt}}|{{.Repository}}:{{.Tag}}'; }
+# fill_names LISTING NAME-OF-ASSOC-ARRAY: the images by name, as "id" (bare hex).
+fill_names() {
   local listing=$1 id created name
   local -n into=$2
   into=()
-  while read -r id created name; do
+  while IFS='|' read -r id created name; do
     [[ -n $name && $name != *'<none>'* ]] || continue
     # shellcheck disable=SC2034,SC2004  # into is a nameref to the caller's array
     into[$name]=$(norm_id "$id")
@@ -336,17 +342,17 @@ prune_old() {
   }
   for app in cms web; do
     rows=()
-    while read -r id created name; do
+    while IFS='|' read -r id created name; do
       [[ $name =~ ^localhost/oc-$app:[0-9a-f]{40}$ ]] || continue
-      [[ $created =~ ^[0-9]+$ ]] || bad=1
-      rows+=("$created $name")
+      [[ $created =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}\ \+0000\ UTC$ ]] || bad=1
+      rows+=("$created|$name")
     done <<<"$listing"
     if [[ $bad == 1 ]]; then
-      say "WARNING: the image list has no usable creation times; old releases were not pruned"
+      say "WARNING: the image list has creation times in an unexpected form; old releases were not pruned"
       return 0
     fi
     n=0
-    while read -r created name; do
+    while IFS='|' read -r created name; do
       [[ -n $name ]] || continue
       n=$((n + 1))
       ((n > KEEP_TAGS)) || continue
@@ -357,7 +363,7 @@ prune_old() {
       else
         say "WARNING: could not remove $name (it may be in use)"
       fi
-    done < <(printf '%s\n' "${rows[@]}" | sort -k1,1nr -k2,2)
+    done < <(printf '%s\n' "${rows[@]}" | sort -t'|' -k1,1r -k2,2)
   done
 }
 

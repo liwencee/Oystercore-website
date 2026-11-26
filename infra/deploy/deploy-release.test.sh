@@ -103,12 +103,14 @@ case ${1:-} in
   image)
     case ${2:-} in
       ls)
-        [[ ${3:-} == --format && ${4:-} == '{{.Id}} {{.Created}} {{.Repository}}:{{.Tag}}' ]] || { echo "fake podman: unexpected image ls arguments: $*" >&2; exit 99; }
+        [[ ${3:-} == --format && ${4:-} == '{{.Id}}|{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' ]] || { echo "fake podman: unexpected image ls arguments: $*" >&2; exit 99; }
         for f in "$S"/images/*; do
           [[ -f $f ]] || continue
           read -r name id created <"$f"
           [[ -f $S/bare-ids ]] && id=${id#sha256:}
-          printf '%s %s %s\n' "$id" "$created" "$name"
+          # Real podman 4.9.3 prints {{.CreatedAt}} like "2026-03-23 21:33:59 +0000 UTC" and
+          # {{.Created}} like "8 months ago"; the fakes are seeded with unix seconds.
+          printf '%s|%s|%s\n' "$id" "$(date -u -d "@$created" '+%Y-%m-%d %H:%M:%S +0000 UTC')" "$name"
         done
         ;;
       inspect)
@@ -726,6 +728,21 @@ size=$(stat -c %s "$SPOOL_DIR/incoming.tar.gz")
 APPLY_ENV+=("OC_MAX_TARBALL_BYTES=$size")
 run_good
 if [[ $RC -eq 0 ]]; then ok "a spool file exactly at the limit is accepted"; else notok "at the limit: exits $RC"; show_out; fi
+
+new_case limits-conf
+good_tarball
+mkdir -p "$CASE/bin"
+cp "$APPLY" "$CASE/bin/apply-release.sh"
+printf 'MAX_TARBALL_BYTES=1\n' >"$CASE/bin/limits.conf"
+RC=0
+(cd "$CASE" && env "${APPLY_ENV[@]}" bash bin/apply-release.sh prod "$SHA_NEW" "$CMS_ID" "$WEB_ID") >"$OUT" 2>&1 || RC=$?
+if [[ $RC -eq 5 ]]; then ok "limits.conf next to the script sets the size limit (and the script works when started by a relative path)"; else notok "limits.conf: exits $RC (wanted 5)"; show_out; fi
+check "limits.conf: the refusal is for size" grep -qi 'too large' "$OUT"
+printf 'MAX_TARBALL_BYTES=notanumber\nsomething else\n' >"$CASE/bin/limits.conf"
+good_tarball
+RC=0
+(cd "$CASE" && env "${APPLY_ENV[@]}" bash bin/apply-release.sh prod "$SHA_NEW" "$CMS_ID" "$WEB_ID") >"$OUT" 2>&1 || RC=$?
+if [[ $RC -eq 0 ]]; then ok "a limits.conf line that is not a number is ignored (default limit)"; else notok "bad limits.conf: exits $RC"; show_out; fi
 
 new_case spool-removed-on-refusal
 good_tarball
