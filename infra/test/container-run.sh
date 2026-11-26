@@ -43,6 +43,22 @@ expect_fail() {
   fi
 }
 
+# expect_fail_because DESCRIPTION TEXT CMD...: the command must fail, and its output must contain
+# TEXT (so it fails for the stated reason and not for some other one).
+expect_fail_because() {
+  local desc=$1 text=$2
+  shift 2
+  if "$@" >"$work/expect.out" 2>&1; then
+    notok "$desc (it succeeded, it should have failed)"
+    sed 's/^/         | /' "$work/expect.out" | head -n 20
+  elif grep -qF -- "$text" "$work/expect.out"; then
+    ok "$desc (because: $text)"
+  else
+    notok "$desc, but not for the stated reason (wanted '$text')"
+    sed 's/^/         | /' "$work/expect.out" | head -n 20
+  fi
+}
+
 # yes_if DESCRIPTION CMD...: ok when the command succeeds, NOT OK when it fails (no output shown).
 yes_if() {
   local desc=$1
@@ -63,12 +79,13 @@ run_shellcheck() {
 make_settings() {
   mkdir -p "$work/keys"
   local u
-  for u in alice bob; do
+  for u in alice bob deploy; do
     [[ -f $work/keys/$u ]] || ssh-keygen -q -t ed25519 -N '' -C "$u@test" -f "$work/keys/$u"
   done
   cat >"$work/server.env" <<EOF
 OC_DOMAIN=example.test
 OC_ADMINS=alice:$work/keys/alice.pub,bob:$work/keys/bob.pub
+OC_DEPLOY_PUBKEY=$work/keys/deploy.pub
 OC_SSH_PORT=2222
 OC_TIMEZONE=Africa/Lagos
 OC_ENVS=prod staging
@@ -112,6 +129,7 @@ section "refusals before anything is installed"
 bad_env() { printf '%s\n' "$1" >"$work/bad.env"; }
 base="OC_DOMAIN=example.test
 OC_ADMINS=alice:$work/keys/alice.pub
+OC_DEPLOY_PUBKEY=$work/keys/deploy.pub
 OC_SSH_PORT=2222"
 bad_env "$base
 OC_SSH_PORT=22"
@@ -131,6 +149,49 @@ expect_fail "an admin named root is refused" bash "$infra/bootstrap.sh" --config
 expect_fail "a non-root user is refused" runuser -u nobody -- bash "$infra/bootstrap.sh" --config "$work/server.env"
 expect_fail "a missing settings file is refused" bash "$infra/bootstrap.sh" --config "$work/nope.env"
 
+# The deploy account's settings. Each refusal must be for its own reason: the base settings
+# above are valid, so only the one line changed can be the cause.
+bad_env "$base
+OC_DEPLOY_PUBKEY="
+expect_fail_because "the deploy account switched on with an empty key setting is refused" "OC_DEPLOY_ENABLED=yes needs OC_DEPLOY_PUBKEY" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "OC_DOMAIN=example.test
+OC_ADMINS=alice:$work/keys/alice.pub
+OC_SSH_PORT=2222"
+expect_fail_because "the same, with OC_DEPLOY_ENABLED left at its default (yes)" "needs OC_DEPLOY_PUBKEY" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "$base
+OC_DEPLOY_PUBKEY=$work/keys/deploy"
+expect_fail_because "a PRIVATE key as the deploy key is refused" "contains a PRIVATE key" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "$base
+OC_DEPLOY_PUBKEY=$work/keys/alice.pub"
+expect_fail_because "an admin's key as the deploy key is refused" "is the same key as the admin 'alice'" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "$base
+OC_DEPLOY_PUBKEY=$work/keys/nope.pub"
+expect_fail_because "a deploy key file that does not exist is refused" "public key file not found" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+printf 'command="/bin/sh",pty %s\n' "$(cut -d' ' -f1,2 "$work/keys/deploy.pub")" >"$work/keys/deploy-with-options.pub"
+bad_env "$base
+OC_DEPLOY_PUBKEY=$work/keys/deploy-with-options.pub"
+expect_fail_because "a deploy key that carries options of its own is refused" "is not a plain public key line" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "$base
+OC_DEPLOY_ENABLED=maybe"
+expect_fail_because "OC_DEPLOY_ENABLED=maybe is refused" "OC_DEPLOY_ENABLED must be yes or no" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "$base
+OC_DEPLOY_MAX_BYTES=10"
+expect_fail_because "a size limit of 10 bytes is refused" "OC_DEPLOY_MAX_BYTES must be" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "$base
+OC_DEPLOY_MAX_BYTES=999999999999999"
+expect_fail_because "a size limit of 900 TB is refused" "OC_DEPLOY_MAX_BYTES must be" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+# Positive controls: the settings the refusals above would be accepted with.
+# shellcheck disable=SC2317  # called through expect
+validates() { # FILE: the settings parse and validate (nothing is installed)
+  bash -c 'source "$1/lib/common.sh"; oc_load_config "$2"; oc_validate_config' _ "$infra" "$1"
+}
+bad_env "OC_DOMAIN=example.test
+OC_ADMINS=alice:$work/keys/alice.pub
+OC_SSH_PORT=2222
+OC_DEPLOY_ENABLED=no"
+expect "OC_DEPLOY_ENABLED=no needs no deploy key (positive control)" validates "$work/bad.env"
+expect "the real settings validate (positive control)" validates "$work/server.env"
+
 # --------------------------------------------------------------------------------------
 snapshot() {
   # Content, mode, owner and modification time of every file in the places the setup writes.
@@ -140,7 +201,7 @@ snapshot() {
     /etc/sudoers.d /etc/fail2ban /etc/audit/rules.d /etc/sysctl.d /etc/mysql /etc/clamav /etc/apt/apt.conf.d \
     /etc/apt/sources.list.d /etc/apt/preferences.d /etc/apt/keyrings /etc/logrotate.d /usr/local/lib/oc \
     /usr/local/sbin/oc-cloudflare-ips /home/alice/.ssh /home/bob/.ssh /etc/subuid /etc/subgid /var/lib/systemd/linger \
-    /home/oc-prod/.config /home/oc-staging/.config; do
+    /home/oc-prod/.config /home/oc-staging/.config /var/lib/oc-deploy /etc/ssh/oc-deploy.authorized_keys /etc/passwd /etc/group /etc/shadow; do
     [[ -e $d ]] || continue
     find "$d" -type f -print0 | sort -z | xargs -0 -r sha256sum >>"$out"
     find "$d" \( -type f -o -type l \) -printf '%p mode=%m owner=%u:%g mtime=%T@ link=%l\n' | sort >>"$out"
@@ -178,7 +239,7 @@ for id in NET-02 NET-06 OS-02 OS-03 OS-05 OS-08 CTR-03; do
   expect "$id is SKIPped in container mode" grep -q "^SKIP $id " "$work/verify1.txt"
 done
 expect "TLS-01 warns about the placeholder certificate" grep -q '^WARN TLS-01 .*PLACEHOLDER' "$work/verify1.txt"
-for id in SSH-01 SSH-02 SSH-03 SSH-04 NET-01 NET-03 NET-04 NET-05 OS-01 CTR-01 CTR-02 SVC-02 SVC-03 FS-01 FS-02 DB-01 PKG-01 PKG-02; do
+for id in SSH-01 SSH-02 SSH-03 SSH-04 DEP-01 DEP-02 NET-01 NET-03 NET-04 NET-05 OS-01 CTR-01 CTR-02 SVC-02 SVC-03 FS-01 FS-02 DB-01 PKG-01 PKG-02; do
   expect "$id passes" grep -q "^PASS $id " "$work/verify1.txt"
 done
 
@@ -373,8 +434,8 @@ mutation SSH-01 "an earlier SSH drop-in turns passwords back on" \
 mutation SSH-02 "an earlier SSH drop-in allows root" \
   "printf 'PermitRootLogin yes\n' >/etc/ssh/sshd_config.d/00-aaa.conf" "rm -f /etc/ssh/sshd_config.d/00-aaa.conf"
 mutation SSH-03 "another user is allowed to sign in" \
-  "sed -i 's/^AllowUsers .*/AllowUsers alice bob mallory/' /etc/ssh/sshd_config.d/00-oc-hardening.conf" \
-  "sed -i 's/^AllowUsers .*/AllowUsers alice bob/' /etc/ssh/sshd_config.d/00-oc-hardening.conf"
+  "sed -i 's/^AllowUsers .*/AllowUsers alice bob oc-deploy mallory/' /etc/ssh/sshd_config.d/00-oc-hardening.conf" \
+  "sed -i 's/^AllowUsers .*/AllowUsers alice bob oc-deploy/' /etc/ssh/sshd_config.d/00-oc-hardening.conf" "AllowUsers is 'alice bob mallory oc-deploy'"
 mutation SSH-04 "sshd also listens on port 22" \
   "printf 'Port 22\n' >/etc/ssh/sshd_config.d/00-aaa.conf" "rm -f /etc/ssh/sshd_config.d/00-aaa.conf"
 mutation NET-01 "ufw would allow incoming by default" \
@@ -575,6 +636,123 @@ qinsert "a comment line ending in a backslash comes before PodmanArgs=--privileg
   '# note @BS@' 'PodmanArgs=--privileged'
 
 
+# --- Task 4: Pull=never, the deploy account, and sshd's per-user rules ------------------------
+# Every change below is made, checked, and undone; each must fail for the stated reason.
+for f in "$infra/quadlet/oc-cms.container.template" "$infra/quadlet/oc-web.container.template" "$qweb" "$qcms" \
+  /home/oc-staging/.config/containers/systemd/oc-web-staging.container /home/oc-staging/.config/containers/systemd/oc-cms-staging.container; do
+  yes_if "Pull=never is in $(basename "$f")" grep -qx 'Pull=never' "$f"
+done
+qmutation "the web container loses Pull=never (a missing image could then be fetched from a registry)" "$qweb" '/^Pull=never$/d' "Pull is not never"
+qmutation "the web container's Pull=never becomes Pull=always" "$qweb" 's/^Pull=never$/Pull=always/' "Pull is not never"
+qmutation "the CMS container gets Pull=missing" "$qcms" 's/^Pull=never$/Pull=missing/' "Pull is not never"
+qmutation "the CMS container gets a second Pull line" "$qcms" 's|^Pull=never$|&\nPull=always|' "Pull appears 2 times"
+qmutation "the web container gets Pull = always (spaces around =)" "$qweb" 's|^Pull=never$|Pull = always|' "Pull is not never"
+
+section "the deploy account: every way of widening it must be noticed"
+yes_if "before the changes: DEP-01, DEP-02, SSH-01, SSH-02 and SSH-03 pass on the untouched system (so a FAIL below is caused by the change)" \
+  bash -c "bash '$infra/verify.sh' 2>&1 | grep -cE '^PASS (DEP-01|DEP-02|SSH-01|SSH-02|SSH-03) ' | grep -qx 5"
+dkeys=/etc/ssh/oc-deploy.authorized_keys
+dapply=/usr/local/lib/oc/deploy/apply-release.sh
+dforced=/usr/local/lib/oc/deploy/deploy-release
+dsudo=/etc/sudoers.d/92-oc-deploy
+dlimits=/usr/local/lib/oc/deploy/limits.conf
+ddrop=/etc/ssh/sshd_config.d/00-oc-hardening.conf
+dbak=$work/dbak
+mkdir -p "$dbak"
+# fmutation ID DESCRIPTION FILE SED-EXPRESSION EXPECTED...: save FILE, edit it with sed, check, put it back (same owner and mode).
+fmutation() {
+  local id=$1 desc=$2 file=$3 expr=$4
+  shift 4
+  mutation "$id" "$desc" "cp -p $file $dbak/$(basename "$file") && sed -E -i '$expr' $file" "cp -p $dbak/$(basename "$file") $file && rm -f $dbak/$(basename "$file")" "$@"
+}
+
+# --- DEP-01: the key line
+mutation DEP-01 "a second key is added to the deploy account's key file" \
+  "cp -p $dkeys $dbak/keys && cat $work/keys/alice.pub >>$dkeys" "cp -p $dbak/keys $dkeys" "has 2 lines, not exactly one key"
+fmutation DEP-01 "the key line loses 'restrict'" "$dkeys" 's/,restrict//' "must start with exactly"
+fmutation DEP-01 "the key line gets the pty option" "$dkeys" 's/,restrict /,restrict,pty /' "must start with exactly"
+fmutation DEP-01 "the key line gets an agent-forwarding-friendly option set instead of restrict" "$dkeys" 's/,restrict /,no-pty /' "must start with exactly"
+fmutation DEP-01 "the key line's forced command is /bin/sh" "$dkeys" 's|^command="[^"]*"|command="/bin/sh"|' "must start with exactly"
+fmutation DEP-01 "the key line has no command= at all" "$dkeys" 's/^command="[^"]*",restrict //' "must start with exactly"
+mutation DEP-01 "the deploy key is replaced by an admin's key (alice)" \
+  "cp -p $dkeys $dbak/keys && printf 'command=\"$dforced\",restrict %s oc-deploy-ci\n' \"\$(cut -d' ' -f1,2 $work/keys/alice.pub)\" >$dkeys" "cp -p $dbak/keys $dkeys" "the deploy key is also the key of the admin alice"
+mutation DEP-01 "the key file is owned by the deploy user (it could rewrite its own forced command)" \
+  "chown oc-deploy $dkeys" "chown root $dkeys" "is not owned by root"
+mutation DEP-01 "the key file is writable by everyone" "chmod 0666 $dkeys" "chmod 0644 $dkeys" "can be changed by someone other than root"
+mutation DEP-01 "the key file is a symbolic link" \
+  "mv $dkeys $dbak/keys.real && ln -s $dbak/keys.real $dkeys" "rm -f $dkeys && mv $dbak/keys.real $dkeys" "is missing or not a plain file"
+# --- DEP-01: sudo
+mutation DEP-01 "the deploy user gets a second sudo rule (all commands)" \
+  "printf 'oc-deploy ALL=(ALL) NOPASSWD: ALL\n' >/etc/sudoers.d/93-extra && chmod 0440 /etc/sudoers.d/93-extra" "rm -f /etc/sudoers.d/93-extra" "sudo shows 2 rules"
+fmutation DEP-01 "the one sudo rule's arguments become a bare wildcard" "$dsudo" 's|^(oc-deploy ALL=.*apply-release\.sh) .*$|\1 *|' "the one sudo rule is for"
+fmutation DEP-01 "the one sudo rule may run as any user" "$dsudo" 's/ALL=\(root\)/ALL=(ALL)/' "does not run as root only"
+fmutation DEP-01 "sudo is told to let the deploy user set environment variables" "$dsudo" 's/^Defaults:oc-deploy .*/Defaults:oc-deploy env_reset, setenv/' "lets the deploy account set environment variables"
+fmutation DEP-01 "sudo is told to keep environment variables for the deploy user" "$dsudo" 's/^Defaults:oc-deploy .*/Defaults:oc-deploy env_keep+="OC_ROOT OC_PODMAN"/' "is not exactly what the bootstrap writes"
+fmutation DEP-01 "the sudo rule asks for a password (it would never work)" "$dsudo" 's/NOPASSWD: //' "has options other than !authenticate"
+mutation DEP-01 "the deploy user is in the sudo group" "usermod -aG sudo oc-deploy" "gpasswd -d oc-deploy sudo" "groups beyond its own"
+mutation DEP-01 "the deploy user is in the admins' group" "usermod -aG oc-admins oc-deploy" "gpasswd -d oc-deploy oc-admins" "groups beyond its own"
+mutation DEP-01 "the deploy user has a password" "usermod -p '\$6\$abc\$def' oc-deploy" "usermod -p '!' oc-deploy" "it has a password"
+mutation DEP-01 "the deploy user's shell is bash" "usermod -s /bin/bash oc-deploy" "usermod -s /bin/sh oc-deploy" "its shell is not /bin/sh"
+mutation DEP-01 "the deploy user does not exist (renamed away)" "usermod -l oc-deploy-gone oc-deploy" "usermod -l oc-deploy oc-deploy-gone" "the deploy user oc-deploy does not exist"
+# --- DEP-01: what it runs
+mutation DEP-01 "apply-release.sh is writable by the group" "chmod 0775 $dapply" "chmod 0755 $dapply" "is not root:root 755"
+mutation DEP-01 "apply-release.sh is owned by the deploy user" "chown oc-deploy:oc-deploy $dapply" "chown root:root $dapply" "is not root:root 755"
+mutation DEP-01 "deploy-release is owned by the deploy user" "chown oc-deploy:oc-deploy $dforced" "chown root:root $dforced" "is not root:root 755"
+mutation DEP-01 "apply-release.sh has one line added" "cp -p $dapply $dbak/apply && echo '# changed' >>$dapply" "cp -p $dbak/apply $dapply" "is not the same as infra/deploy/apply-release.sh"
+mutation DEP-01 "deploy-release has one line added" "cp -p $dforced $dbak/forced && echo '# changed' >>$dforced" "cp -p $dbak/forced $dforced" "is not the same as infra/deploy/deploy-release.sh"
+mutation DEP-01 "the deploy folder is writable by everyone (a script could be replaced)" "chmod 0777 /usr/local/lib/oc/deploy" "chmod 0755 /usr/local/lib/oc/deploy" "can be changed by someone other than root"
+mutation DEP-01 "the size limit file says another number" "cp -p $dlimits $dbak/limits && sed -i 's/=.*/=9999999999999/' $dlimits" "cp -p $dbak/limits $dlimits" "does not say MAX_TARBALL_BYTES"
+mutation DEP-01 "the deploy user's home is writable by everyone" "chmod 0777 /var/lib/oc-deploy" "chmod 0755 /var/lib/oc-deploy" "is not root:root 755"
+mutation DEP-01 "the spool folder is open to everyone" "chmod 0777 /var/lib/oc-deploy/spool" "chmod 0770 /var/lib/oc-deploy/spool" "is not root:oc-deploy 770"
+# --- DEP-01: sshd's rules for this user
+fmutation DEP-01 "sshd's Match block for the deploy user allows a terminal" "$ddrop" 's/^    PermitTTY no$/    PermitTTY yes/' "permittty is 'yes'"
+fmutation DEP-01 "sshd's Match block allows TCP forwarding" "$ddrop" 's/^    AllowTcpForwarding no$/    AllowTcpForwarding yes/' "allowtcpforwarding is 'yes'"
+fmutation DEP-01 "sshd's Match block allows agent forwarding" "$ddrop" 's/^    AllowAgentForwarding no$/    AllowAgentForwarding yes/' "allowagentforwarding is 'yes'"
+fmutation DEP-01 "sshd's Match block allows X11 forwarding" "$ddrop" 's/^    X11Forwarding no$/    X11Forwarding yes/' "x11forwarding is 'yes'"
+fmutation DEP-01 "sshd's Match block allows tunnels" "$ddrop" 's/^    PermitTunnel no$/    PermitTunnel yes/' "permittunnel is 'yes'"
+fmutation DEP-01 "sshd's Match block runs ~/.ssh/rc" "$ddrop" 's/^    PermitUserRC no$/    PermitUserRC yes/' "permituserrc is 'yes'"
+fmutation DEP-01 "sshd's Match block forces another command" "$ddrop" 's|^    ForceCommand .*|    ForceCommand /bin/sh|' "forcecommand is '/bin/sh'"
+fmutation DEP-01 "sshd's Match block reads the key from the user's own home again" "$ddrop" '/^    AuthorizedKeysFile /d' "authorizedkeysfile is '.ssh/authorized_keys"
+mutation DEP-01 "sshd's Match block for the deploy user is gone" "cp -p $ddrop $dbak/drop && sed -i '/^Match User oc-deploy\$/,\$d' $ddrop" "cp -p $dbak/drop $ddrop" "permittty is 'yes'"
+# --- SSH-01, SSH-02, SSH-03: asked for each user who may sign in
+fmutation SSH-01 "the deploy user's Match block switches passwords on (only the per-user answer shows it)" "$ddrop" 's/^    AuthenticationMethods publickey$/    PasswordAuthentication yes/' "oc-deploy(passwordauthentication=yes"
+fmutation SSH-02 "the deploy user's Match block allows root login (only the per-user answer shows it)" "$ddrop" 's/^    PermitUserEnvironment no$/    PermitRootLogin yes/' "oc-deploy(permitrootlogin=yes)"
+mutation SSH-01 "a Match block for another address (not the one asked about) switches passwords on" \
+  "printf 'Match Address 198.51.100.0/24\n    PasswordAuthentication yes\n' >/etc/ssh/sshd_config.d/10-zz.conf" "rm -f /etc/ssh/sshd_config.d/10-zz.conf" "a Match or Include line this setup did not write"
+mutation SSH-02 "a Match block for another address allows root login" \
+  "printf 'Match Address 198.51.100.0/24\n    PermitRootLogin yes\n' >/etc/ssh/sshd_config.d/10-zz.conf" "rm -f /etc/ssh/sshd_config.d/10-zz.conf" "a Match or Include line this setup did not write"
+mutation SSH-01 "a Match block for the admin bob is added to the main sshd_config" \
+  "cp -p /etc/ssh/sshd_config $dbak/sshd_config && printf 'Match User bob\n    PasswordAuthentication yes\n' >>/etc/ssh/sshd_config" "cp -p $dbak/sshd_config /etc/ssh/sshd_config" "a Match or Include line this setup did not write"
+mutation SSH-01 "an Include of a file outside sshd_config.d is added" \
+  "cp -p /etc/ssh/sshd_config $dbak/sshd_config && printf 'Include /tmp/oc-extra.conf\n' >>/etc/ssh/sshd_config" "cp -p $dbak/sshd_config /etc/ssh/sshd_config" "a Match or Include line this setup did not write"
+mutation SSH-01 "our own Match line is spelled with another user name (so it is not ours any more)" \
+  "cp -p $ddrop $dbak/drop && sed -i 's/^Match User oc-deploy\$/Match User oc-deploy,bob/' $ddrop" "cp -p $dbak/drop $ddrop" "a Match or Include line this setup did not write"
+mutation SSH-03 "the deploy user is no longer in AllowUsers" "cp -p $ddrop $dbak/drop && sed -i 's/^AllowUsers .*/AllowUsers alice bob/' $ddrop" "cp -p $dbak/drop $ddrop" "AllowUsers is 'alice bob'"
+mutation SSH-03 "the deploy account is switched off in server.env while its account still exists" \
+  "cp -p $work/server.env $dbak/server.env && printf 'OC_DEPLOY_ENABLED=no\n' >>$work/server.env" "cp -p $dbak/server.env $work/server.env" "AllowUsers is 'alice bob oc-deploy'"
+mutation DEP-01 "the deploy account is switched off in server.env while its account still exists" \
+  "cp -p $work/server.env $dbak/server.env && printf 'OC_DEPLOY_ENABLED=no\n' >>$work/server.env" "cp -p $dbak/server.env $work/server.env" "the deploy account is switched off but is not gone"
+
+# --- DEP-02: what the deploy user can reach, tried as that user
+mutation DEP-02 "a secret file is readable by everyone" "chmod 0644 /etc/oc/prod.env" "chmod 0640 /etc/oc/prod.env" "can read /etc/oc/prod.env"
+mutation DEP-02 "the deploy user is in the group of an environment (it can read the env files)" "usermod -aG oc-prod oc-deploy" "gpasswd -d oc-deploy oc-prod" "can read /etc/oc/prod.env"
+mutation DEP-02 "/etc/oc can be listed by everyone" "chmod 0755 /etc/oc" "chmod 0711 /etc/oc" "can list /etc/oc"
+mutation DEP-02 "an environment's data folder is open to everyone" "chmod 0755 /var/lib/oc/prod" "chmod 0750 /var/lib/oc/prod" "can read /var/lib/oc/prod"
+mutation DEP-02 "an environment user's home is open to everyone" "chmod 0755 /home/oc-prod" "chmod 0700 /home/oc-prod" "can read /home/oc-prod"
+mutation DEP-02 "the deploy user cannot write its spool (the control: otherwise every 'cannot' above proves nothing)" \
+  "chmod 0750 /var/lib/oc-deploy/spool" "chmod 0770 /var/lib/oc-deploy/spool" "control: oc-deploy cannot write its own spool folder"
+mutation DEP-02 "commands cannot be run as the deploy user at all (a failing runuser)" \
+  "printf '#!/bin/sh\nexit 1\n' >/usr/local/sbin/runuser && chmod 0755 /usr/local/sbin/runuser" "rm -f /usr/local/sbin/runuser" "cannot run a command as oc-deploy"
+mutation DEP-02 "the deploy user may get a root shell through sudo" \
+  "printf 'oc-deploy ALL=(ALL) NOPASSWD: ALL\n' >/etc/sudoers.d/93-extra && chmod 0440 /etc/sudoers.d/93-extra" "rm -f /etc/sudoers.d/93-extra" "a root shell through sudo works"
+mutation DEP-02 "the deploy user may run sudo true" \
+  "printf 'oc-deploy ALL=(root) NOPASSWD: /usr/bin/true\n' >/etc/sudoers.d/93-extra && chmod 0440 /etc/sudoers.d/93-extra" "rm -f /etc/sudoers.d/93-extra" "sudo -n true works"
+mutation DEP-02 "the deploy user owns what it runs (it could replace apply-release.sh)" "chown oc-deploy $dapply" "chown root $dapply" "can write $dapply"
+mutation DEP-02 "/usr/local/sbin is writable by everyone" "chmod 0777 /usr/local/sbin" "chmod 0755 /usr/local/sbin" "can write /usr/local/sbin"
+mutation DEP-02 "the deploy user's home is writable by everyone" "chmod 0777 /var/lib/oc-deploy" "chmod 0755 /var/lib/oc-deploy" "can write /var/lib/oc-deploy"
+mutation DEP-02 "an environment's data folder is missing (so it cannot be checked, which is a failure)" \
+  "mv /var/lib/oc/prod/tmp $dbak/prodtmp" "mv $dbak/prodtmp /var/lib/oc/prod/tmp" "/var/lib/oc/prod/tmp does not exist, so it cannot be checked"
+
 # --- VERIFY_CONTAINER=1 on a real host must not quietly skip the live checks ---
 realhost_made=0
 if [[ ! -d /run/systemd/system ]]; then
@@ -661,6 +839,9 @@ gen_case "--add-host" web "$img" " --add-host x:127.0.0.1$img" "flag '--add-host
 gen_case "--env LD_PRELOAD" web "$img" " --env LD_PRELOAD=/x.so$img" "environment variable LD_PRELOAD is not allowed"
 gen_case "the CMS mounts the podman socket" cms " --publish 127.0.0.1:1337:1337" " -v /run/podman/podman.sock:/s --publish 127.0.0.1:1337:1337" "the mount '/run/podman/podman.sock:/s'"
 gen_case "the CMS mounts ClamAV read-write" cms "-v /run/clamav:/run/clamav:ro" "-v /run/clamav:/run/clamav" "the mount '/run/clamav:/run/clamav'"
+gen_case "--pull never replaced by --pull always" web "--pull never" "--pull always" "--pull is 'always'"
+gen_case "--pull never replaced by --pull=missing" web "--pull never" "--pull=missing" "--pull is 'missing'"
+gen_case "--pull never removed" web " --pull never" "" "lacks: --pull"
 
 # The generated units: only the one ExecStart (checked flag by flag) and the generator's own
 # podman rm in ExecStop and ExecStopPost may run anything. Crafted copies of the real output.
@@ -813,12 +994,157 @@ else
   notok "unexpected authentication methods offered"
 fi
 expect_fail "TCP forwarding is refused (ssh -R)" "${sshc[@]}" -i "$work/keys/alice" -o ExitOnForwardFailure=yes -R 15432:127.0.0.1:3306 alice@127.0.0.1 true
+
+# --- the deploy account over a real SSH connection ---------------------------------------------
+dkey=$work/keys/deploy
+dsha=1111111111111111111111111111111111111111
+did=sha256:$(printf 'a%.0s' $(seq 64))
+dsshc=("${sshc[@]}" -o IdentitiesOnly=yes -i "$dkey")
+# dssh ARGS...: ssh as the deploy account with the deploy key, no input (a test that sends a file redirects it itself)
+dssh() { "${dsshc[@]}" oc-deploy@127.0.0.1 "$@" </dev/null; }
+rc=0
+out=$(dssh id 2>&1) || rc=$?
+if [[ $rc -eq 2 && $out == *"the command must be exactly"* && $out != *"uid="* ]]; then
+  ok "the deploy key signs in, and asking for 'id' runs the forced command instead (it refuses with exit 2; no uid= output)"
+else
+  notok "the deploy account answered 'id' unexpectedly (exit $rc): ${out:0:200}"
+fi
+rc=0
+out=$(dssh "prod ${dsha:0:39} $did $did" 2>&1) || rc=$?
+if [[ $rc -eq 2 && $out == *"the command must be exactly"* ]]; then ok "a 39-character commit over SSH is refused by the forced command (exit 2)"; else notok "39-character commit over SSH: exit $rc: ${out:0:200}"; fi
+rc=0
+out=$("${dsshc[@]}" -T oc-deploy@127.0.0.1 </dev/null 2>&1) || rc=$?
+if [[ $rc -eq 2 && $out == *"no command given"* ]]; then ok "signing in with no command (a login shell) runs the forced command, which refuses (exit 2)"; else notok "no command: exit $rc: ${out:0:200}"; fi
+rc=0
+out=$("${dsshc[@]}" -tt oc-deploy@127.0.0.1 id </dev/null 2>&1) || rc=$?
+if [[ $out == *"PTY allocation request failed"* && $out != *"uid="* ]]; then ok "a terminal (ssh -tt) is refused for the deploy account"; else notok "ssh -tt for the deploy account: exit $rc: ${out:0:200}"; fi
+expect_fail "TCP forwarding is refused for the deploy account (ssh -L)" "${dsshc[@]}" -o ExitOnForwardFailure=yes -L 15433:127.0.0.1:3306 oc-deploy@127.0.0.1 id
+expect_fail "scp to the deploy account is refused (the forced command is not scp)" scp -P 2222 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o IdentitiesOnly=yes -i "$dkey" /etc/hostname oc-deploy@127.0.0.1:/tmp/hostname-x
+expect_fail "sftp to the deploy account is refused (a subsystem is forced too)" bash -c "printf 'ls\n' | sftp -P 2222 -b - -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o IdentitiesOnly=yes -i '$dkey' oc-deploy@127.0.0.1"
+expect_fail "an admin's key cannot sign in as the deploy account" "${sshc[@]}" -o IdentitiesOnly=yes -i "$work/keys/alice" oc-deploy@127.0.0.1 id
+expect_fail "the deploy key cannot sign in as an admin" "${sshc[@]}" -o IdentitiesOnly=yes -i "$dkey" alice@127.0.0.1 id
+expect_fail "the deploy key cannot sign in as root" "${sshc[@]}" -o IdentitiesOnly=yes -i "$dkey" root@127.0.0.1 id
+rc=0
+out=$("${sshc[@]}" -i "$work/keys/alice" -tt alice@127.0.0.1 tty </dev/null 2>&1) || rc=$?
+if [[ $out == *"/dev/pts/"* ]]; then ok "an admin still gets a terminal (the deploy account's Match block did not leak to admins)"; else notok "admin terminal: exit $rc: ${out:0:200}"; fi
+
+# The whole chain: SSH, forced command, spool, sudo, root script, Podman as the environment's user.
+# Podman cannot run inside this container, so the root script stops at its first Podman call; what is
+# proved here is everything before it, with the real sudo, runuser and file permissions.
+qsum_before=$(sha256sum "$qweb" "$qcms" | sha256sum)
+printf 'not an image' | gzip -c >"$work/e2e.tgz"
+rc=0
+out=$("${dsshc[@]}" oc-deploy@127.0.0.1 "prod $dsha $did $did" <"$work/e2e.tgz" 2>&1) || rc=$?
+if [[ $out == *"received"* && $out == *"deploying $dsha to prod"* ]]; then
+  ok "end to end: the forced command spooled the tarball and the root script ran through sudo (output: ${out//$'\n'/ | })"
+else
+  notok "end to end: the chain did not reach the root script (exit $rc): ${out:0:300}"
+fi
+yes_if "end to end: it stopped after the checks, before changing anything (exit 1 or 6, not 2 or 5)" test "$rc" -eq 1 -o "$rc" -eq 6
+yes_if "end to end: the Quadlet files are unchanged" test "$(sha256sum "$qweb" "$qcms" | sha256sum)" = "$qsum_before"
+yes_if "end to end: the spool folder is empty again afterwards" bash -c "[[ -z \$(ls -A /var/lib/oc-deploy/spool | grep -v '^.lock\$') ]]"
+yes_if "end to end: sudo's own log records the one command, run as root, by the deploy user" bash -c "grep -q 'oc-deploy : .*USER=root ; COMMAND=/usr/local/lib/oc/deploy/apply-release.sh prod $dsha ' /var/log/sudo.log"
+# sudo itself, called by the deploy user directly
+expect_fail_because "sudo refuses anything but the one script: a root shell" "a password is required" runuser -u oc-deploy -- sudo -n -i true
+expect_fail_because "sudo refuses the script with arguments of another shape (bad environment)" "a password is required" runuser -u oc-deploy -- sudo -n /usr/local/lib/oc/deploy/apply-release.sh dev "$dsha" "$did" "$did"
+expect_fail_because "sudo refuses the script with arguments of another shape (a fifth argument)" "a password is required" runuser -u oc-deploy -- sudo -n /usr/local/lib/oc/deploy/apply-release.sh prod "$dsha" "$did" "$did" --force
+expect_fail_because "sudo refuses the script with arguments of another shape (a short commit)" "a password is required" runuser -u oc-deploy -- sudo -n /usr/local/lib/oc/deploy/apply-release.sh prod "${dsha:0:39}" "$did" "$did"
+expect_fail_because "sudo refuses the script with a wildcard-style argument" "a password is required" runuser -u oc-deploy -- sudo -n /usr/local/lib/oc/deploy/apply-release.sh '*'
+expect_fail_because "sudo refuses another program, even with a good argument list" "a password is required" runuser -u oc-deploy -- sudo -n /usr/bin/id prod "$dsha" "$did" "$did"
+expect_fail_because "sudo refuses to pass environment variables on the command line" "not allowed to set the following environment variables" runuser -u oc-deploy -- sudo -n OC_ROOT=/tmp/evil /usr/local/lib/oc/deploy/apply-release.sh prod "$dsha" "$did" "$did"
+expect_fail_because "the exact shape gets through sudo; the root script then refuses for want of a spool file (exit 5)" "the spool file is missing" runuser -u oc-deploy -- sudo -n /usr/local/lib/oc/deploy/apply-release.sh prod "$dsha" "$did" "$did"
+printf '#!/bin/sh\ntouch /tmp/EVIL-RAN\n' >/tmp/evil-podman && chmod 0755 /tmp/evil-podman
+rm -f /tmp/EVIL-RAN
+expect_fail_because "test overrides in the caller's environment do not reach the root script (env_reset), which still looks for its real spool" "the spool file is missing" \
+  runuser -u oc-deploy -- env OC_ROOT=/tmp/evil OC_PODMAN=/tmp/evil-podman OC_RUNUSER=/tmp/evil-podman SUDO_USER= sudo -n /usr/local/lib/oc/deploy/apply-release.sh prod "$dsha" "$did" "$did"
+yes_if "and the program named in OC_PODMAN was never run" test ! -e /tmp/EVIL-RAN
+rm -f /tmp/evil-podman
 kill "$sshd_pid" 2>/dev/null || true
 rm -f /root/.ssh/authorized_keys
 
 # --------------------------------------------------------------------------------------
 section "Nginx really behaves as configured"
 bash "$infra/test/nginx-behaviour.sh" "$work" || FAILED=$((FAILED + 1))
+
+# --------------------------------------------------------------------------------------
+section "the deploy scripts' unit tests (fakes for podman, systemctl, curl and runuser)"
+rc=0
+bash "$infra/deploy/deploy-release.test.sh" >"$work/deploy-unit.txt" 2>&1 || rc=$?
+tail -n 3 "$work/deploy-unit.txt"
+yes_if "deploy-release.test.sh passes inside the test container" test "$rc" -eq 0
+yes_if "and it ran a few hundred checks" bash -c "[[ \$(grep -c '^ok ' '$work/deploy-unit.txt') -gt 200 ]]"
+
+# --------------------------------------------------------------------------------------
+section "ssh_assert_effective asks for every user, and refuses a Match block that is not ours (bootstrap level)"
+# The bootstrap checks the live rules before it reloads sshd. A change it does not expect must stop it, with
+# the drop-in left exactly as it was.
+cp -p "$ddrop" "$work/dropin.before"
+printf 'PasswordAuthentication yes\n' >/etc/ssh/sshd_config.d/00-aaa.conf
+expect_fail_because "bootstrap stops when an earlier drop-in turns passwords back on" "sshd would use 'passwordauthentication yes' instead of 'passwordauthentication no'" bash "$infra/bootstrap.sh"
+rm -f /etc/ssh/sshd_config.d/00-aaa.conf
+yes_if "that refusal left the drop-in as it was" cmp -s "$ddrop" "$work/dropin.before"
+printf 'Match Address 198.51.100.0/24\n    PasswordAuthentication yes\n' >/etc/ssh/sshd_config.d/10-zz.conf
+expect_fail_because "bootstrap stops when another Match block (for an address nobody asked about) exists" "has a Match or Include line that this setup did not write" bash "$infra/bootstrap.sh"
+rm -f /etc/ssh/sshd_config.d/10-zz.conf
+yes_if "that refusal left the drop-in as it was" cmp -s "$ddrop" "$work/dropin.before"
+# The per-user questions, tried with a sshd whose answer differs for the deploy user only: a shell
+# function stands in for sshd, so the bootstrap's own function is the thing under test.
+# shellcheck disable=SC2317,SC2016  # called through expect; the bash -c program is single-quoted on purpose
+assert_with_fake_sshd() { # SED-EXPRESSION applied to the deploy user's answer
+  bash -c '
+    source "$1/lib/common.sh"; source "$1/lib/ssh.sh"
+    oc_load_config "$OC_CONFIG"; oc_validate_config
+    real=$(/usr/sbin/sshd -T 2>/dev/null)
+    realdeploy=$(/usr/sbin/sshd -T -C "user=oc-deploy,host=x,addr=203.0.113.1" 2>/dev/null)
+    sshd() { # only -T and -T -C user=... are asked
+      if [[ $* == *"user=oc-deploy"* ]]; then printf "%s\n" "$realdeploy" | sed -E "$2"; else printf "%s\n" "$real"; fi
+    }
+    ssh_assert_effective
+  ' _ "$infra" "$1"
+}
+expect "the bootstrap's own check passes on the real answers (positive control)" assert_with_fake_sshd 's/^$//'
+expect_fail_because "ssh_assert_effective notices that passwords are on for the deploy user only" "for oc-deploy" assert_with_fake_sshd 's/^passwordauthentication no$/passwordauthentication yes/'
+expect_fail_because "ssh_assert_effective notices root login for the deploy user only" "for oc-deploy" assert_with_fake_sshd 's/^permitrootlogin no$/permitrootlogin yes/'
+expect_fail_because "ssh_assert_effective notices a terminal for the deploy user (its Match block did not apply)" "the Match block did not take effect" assert_with_fake_sshd 's/^permittty no$/permittty yes/'
+expect_fail_because "ssh_assert_effective notices another forced command for the deploy user" "the Match block did not take effect" assert_with_fake_sshd 's|^forcecommand .*|forcecommand /bin/sh|'
+# shellcheck disable=SC2016  # the bash -c program is single-quoted on purpose
+expect_fail_because "ssh_assert_effective notices a deploy user who is not in AllowUsers" "sshd would allow" bash -c '
+  source "$1/lib/common.sh"; source "$1/lib/ssh.sh"
+  oc_load_config "$OC_CONFIG"; oc_validate_config
+  real=$(/usr/sbin/sshd -T 2>/dev/null)
+  sshd() { printf "%s\n" "$real" | sed -E "s/^allowusers oc-deploy$//"; }
+  ssh_assert_effective' _ "$infra"
+
+# --------------------------------------------------------------------------------------
+section "the deploy account switched off and on again: nothing is left behind, and nothing is lost"
+cp -p "$work/server.env" "$work/server-off.env"
+printf 'OC_DEPLOY_ENABLED=no\n' >>"$work/server-off.env"
+rc=0
+run_logged "$work/bootstrap-off.log" bash "$infra/bootstrap.sh" --config "$work/server-off.env" >/dev/null || rc=$?
+yes_if "bootstrap with OC_DEPLOY_ENABLED=no exits 0" test "$rc" -eq 0
+yes_if "the deploy user is gone" bash -c "! getent passwd oc-deploy && ! getent group oc-deploy"
+yes_if "its key file, sudoers file, scripts and folders are gone" bash -c "[[ ! -e /etc/ssh/oc-deploy.authorized_keys && ! -e /etc/sudoers.d/92-oc-deploy && ! -e /usr/local/lib/oc/deploy && ! -e /var/lib/oc-deploy ]]"
+yes_if "sshd no longer allows it and has no Match block" bash -c "! grep -q 'oc-deploy' /etc/ssh/sshd_config.d/00-oc-hardening.conf && ! grep -q '^Match' /etc/ssh/sshd_config.d/00-oc-hardening.conf"
+yes_if "the admins are still allowed" grep -qx 'AllowUsers alice bob' /etc/ssh/sshd_config.d/00-oc-hardening.conf
+yes_if "sudo still works for the admins' file and the sudo log rules" bash -c "visudo -c >/dev/null && [[ -f /etc/sudoers.d/90-oc-admins ]]"
+rc=0
+OC_CONFIG="$work/server-off.env" bash "$infra/verify.sh" >"$work/verify-off.txt" 2>&1 || rc=$?
+yes_if "verify.sh exits 0 with the deploy account off" test "$rc" -eq 0
+yes_if "DEP-01 and DEP-02 say it is switched off (and pass)" bash -c "grep -q '^PASS DEP-01 the deploy account is switched off' '$work/verify-off.txt' && grep -q '^PASS DEP-02 the deploy account is switched off' '$work/verify-off.txt'"
+rc=0
+run_logged "$work/bootstrap-off2.log" bash "$infra/bootstrap.sh" --config "$work/server-off.env" >/dev/null || rc=$?
+yes_if "a second run with it off exits 0" test "$rc" -eq 0
+yes_if "and changes nothing (changes=0)" grep -q 'DONE changes=0$' "$work/bootstrap-off2.log"
+rc=0
+run_logged "$work/bootstrap-on.log" bash "$infra/bootstrap.sh" >/dev/null || rc=$?
+yes_if "bootstrap with the account on again exits 0" test "$rc" -eq 0
+yes_if "the account is back with its key line and sudo rule" bash -c "getent passwd oc-deploy >/dev/null && [[ -f /etc/ssh/oc-deploy.authorized_keys && -f /etc/sudoers.d/92-oc-deploy ]]"
+rc=0
+bash "$infra/verify.sh" >"$work/verify-on.txt" 2>&1 || rc=$?
+yes_if "verify.sh exits 0 again, with DEP-01 and DEP-02 passing" bash -c "[[ $rc -eq 0 ]] && grep -q '^PASS DEP-01 ' '$work/verify-on.txt' && grep -q '^PASS DEP-02 ' '$work/verify-on.txt'"
+rc=0
+run_logged "$work/bootstrap-on2.log" bash "$infra/bootstrap.sh" >/dev/null || rc=$?
+yes_if "and another run changes nothing (changes=0)" bash -c "[[ $rc -eq 0 ]] && grep -q 'DONE changes=0\$' '$work/bootstrap-on2.log'"
 
 # --------------------------------------------------------------------------------------
 section "shellcheck"

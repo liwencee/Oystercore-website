@@ -25,6 +25,8 @@ source "$OC_INFRA_DIR/lib/common.sh"
 source "$OC_INFRA_DIR/lib/users.sh"
 # shellcheck source=lib/packages.sh
 source "$OC_INFRA_DIR/lib/packages.sh"
+# shellcheck source=lib/ssh.sh
+source "$OC_INFRA_DIR/lib/ssh.sh"
 
 VERIFY_CONTAINER=${VERIFY_CONTAINER:-0}
 # The awk the Nginx tokenizer and the Quadlet normaliser run under. The tests run both parsers
@@ -62,12 +64,21 @@ sorted_words() {
 
 # --- facts read once (the checks run in subshells and inherit these) ---------------
 SSHD_T=""
+# What sshd would do for each user who may sign in: `sshd -T -C user=<u>,host=x,addr=203.0.113.1`.
+# A Match block can change a value for one user only, so the plain `sshd -T` is not enough.
+declare -A SSHD_T_USER=()
 NGINX_T=""
 NGINX_SERVERS=""
 
 load_facts() {
+  local u
+  local -a users=()
   if oc_have sshd; then
     SSHD_T=$(sshd -T 2>/dev/null) || SSHD_T=""
+    read -r -a users <<<"$(ssh_allowed_users)"
+    for u in "${users[@]}"; do
+      SSHD_T_USER[$u]=$(sshd -T -C "user=$u,host=x,addr=203.0.113.1" 2>/dev/null) || SSHD_T_USER[$u]=""
+    done
   fi
   if oc_have nginx; then
     NGINX_T=$(nginx -T 2>/dev/null) || NGINX_T=""
@@ -78,6 +89,8 @@ load_facts() {
 }
 
 sshd_val() { awk -v k="$1" '$1 == k {$1 = ""; sub(/^ /, ""); v = (v == "" ? $0 : v " " $0)} END {print v}' <<<"$SSHD_T"; }
+# sshd_val_user USER KEY: the value of KEY for that user (a Match block may differ from the global one).
+sshd_val_user() { awk -v k="$2" '$1 == k {$1 = ""; sub(/^ /, ""); v = (v == "" ? $0 : v " " $0)} END {print v}' <<<"${SSHD_T_USER[$1]:-}"; }
 
 # nginx_servers: reads `nginx -T` and prints one line per server block, then one summary line:
 #   S|names|ssl|default|reject|verify_client|client_certificate|ssl_protocols
@@ -240,33 +253,64 @@ need_sshd() {
   fi
 }
 
+# need_sshd_users: sshd must have answered for every user who may sign in, and the
+# configuration must hold no Match or Include line of anyone else's (it could switch a rule
+# back on for some connections only, in a way the sample users below would never show).
+need_sshd_users() {
+  local u foreign
+  local -a users=()
+  need_sshd || return 1
+  read -r -a users <<<"$(ssh_allowed_users)"
+  for u in "${users[@]}"; do
+    if [[ -z ${SSHD_T_USER[$u]:-} ]]; then
+      fail "cannot read the effective sshd configuration for the user $u (sshd -T -C user=$u,host=x,addr=203.0.113.1 gave nothing)"
+      return 1
+    fi
+  done
+  foreign=$(ssh_foreign_match)
+  if [[ -n $foreign ]]; then
+    fail "the sshd configuration has a Match or Include line this setup did not write, which could change these rules for some connections: $(printf '%s' "$foreign" | head -n 2 | tr '\n' ' ')"
+    return 1
+  fi
+}
+
 check_ssh_01() {
-  local pw kbd am
-  need_sshd || return 0
-  pw=$(sshd_val passwordauthentication)
-  kbd=$(sshd_val kbdinteractiveauthentication)
-  am=$(sshd_val authenticationmethods)
-  if [[ $pw == no && $kbd == no && $am == publickey ]]; then
-    pass "password login is off; only public keys are accepted"
+  local u pw kbd am bad=""
+  local -a users=()
+  need_sshd_users || return 0
+  read -r -a users <<<"$(ssh_allowed_users)"
+  for u in "${users[@]}"; do
+    pw=$(sshd_val_user "$u" passwordauthentication)
+    kbd=$(sshd_val_user "$u" kbdinteractiveauthentication)
+    am=$(sshd_val_user "$u" authenticationmethods)
+    [[ $pw == no && $kbd == no && $am == publickey ]] || bad+=" $u(passwordauthentication=$pw, kbdinteractiveauthentication=$kbd, authenticationmethods=$am)"
+  done
+  if [[ -z $bad ]]; then
+    pass "password login is off; only public keys are accepted (asked for each user who may sign in: ${users[*]})"
   else
-    fail "password login is not fully off (passwordauthentication=$pw, kbdinteractiveauthentication=$kbd, authenticationmethods=$am)"
+    fail "password login is not fully off for:$bad"
   fi
 }
 
 check_ssh_02() {
-  local v
-  need_sshd || return 0
-  v=$(sshd_val permitrootlogin)
-  if [[ $v == no ]]; then pass "root login is off"; else fail "permitrootlogin is '$v', not 'no'"; fi
+  local u v bad=""
+  local -a users=()
+  need_sshd_users || return 0
+  read -r -a users <<<"$(ssh_allowed_users)"
+  for u in "${users[@]}"; do
+    v=$(sshd_val_user "$u" permitrootlogin)
+    [[ $v == no ]] || bad+=" $u(permitrootlogin=$v)"
+  done
+  if [[ -z $bad ]]; then pass "root login is off"; else fail "permitrootlogin is not 'no' for:$bad"; fi
 }
 
 check_ssh_03() {
   local got want name home bad=""
   need_sshd || return 0
   got=$(sorted_words "$(sshd_val allowusers)")
-  want=$(sorted_words "${OC_ADMIN_NAMES[*]}")
+  want=$(sorted_words "$(ssh_allowed_users)")
   if [[ $got != "$want" ]]; then
-    fail "AllowUsers is '$got', the admins in server.env are '$want'"
+    fail "AllowUsers is '$got', the admins in server.env (and the deploy account, if on) are '$want'"
     return 0
   fi
   for name in "${OC_ADMIN_NAMES[@]}"; do
@@ -278,7 +322,7 @@ check_ssh_03() {
   if [[ -n $bad ]]; then
     fail "admin(s) without a user or an authorized key:$bad"
   else
-    pass "only the named admins may sign in: $got"
+    pass "only the named admins (and the deploy account, if on) may sign in: $got"
   fi
 }
 
@@ -324,6 +368,223 @@ check_ssh_05() {
     [[ $got == "$want" ]] || bad+=" $key=$got(want $want)"
   done
   if [[ -n $bad ]]; then fail "SSH settings differ:$bad"; else pass "MaxAuthTries 3, no X11, agent or TCP forwarding, no empty passwords"; fi
+}
+
+# --- the deploy account ------------------------------------------------------------
+# dep_root_only PATH: PATH and every folder above it belong to root and cannot be written by a
+# group or by others, so the deploy account cannot replace what it is made to run.
+dep_root_only() {
+  local p a g
+  p=$(readlink -f -- "$1" 2>/dev/null) || return 1
+  [[ -n $p && -e $p ]] || return 1
+  while :; do
+    [[ $(stat -c %u -- "$p") == 0 ]] || return 1
+    a=$(stat -c %A -- "$p")
+    g=$(stat -c %G -- "$p")
+    # Anyone may not write. The group may not either, unless it is a group the deploy user is not in
+    # (its only group is its own: DEP-01 checks that too; a system folder may belong to "staff").
+    [[ ${a:8:1} != w ]] || return 1
+    [[ ${a:5:1} != w || $g != "$OC_DEPLOY_USER" ]] || return 1
+    [[ $p == / ]] && return 0
+    p=$(dirname -- "$p")
+  done
+}
+
+# dep_expected_sudo_command: the one command line sudo should show for the deploy account,
+# taken from the same function that writes the rule.
+dep_expected_sudo_command() {
+  users_deploy_sudoers | awk -v u="$OC_DEPLOY_USER" 'index($0, u " ALL=(root) NOPASSWD: ") == 1 {print substr($0, length(u " ALL=(root) NOPASSWD: ") + 1)}'
+}
+
+check_dep_01() {
+  local bad="" f st n line key rest a out entries cmds expect_cmd opts got
+  if [[ $OC_DEPLOY_ENABLED != yes ]]; then
+    for f in "$OC_DEPLOY_SUDOERS" "$OC_DEPLOY_KEYS" "$OC_DEPLOY_FORCED" "$OC_DEPLOY_APPLY"; do
+      if [[ -e $f || -L $f ]]; then bad+=" [$f is still there]"; fi
+    done
+    if getent passwd "$OC_DEPLOY_USER" >/dev/null; then bad+=" [the user $OC_DEPLOY_USER still exists]"; fi
+    if [[ -z $bad ]]; then
+      pass "the deploy account is switched off (OC_DEPLOY_ENABLED=no) and nothing of it is left"
+    else
+      fail "the deploy account is switched off but is not gone:$bad"
+    fi
+    return 0
+  fi
+
+  # 1. the account: a system user, no password, no group but its own, a home it cannot write
+  if ! getent passwd "$OC_DEPLOY_USER" >/dev/null; then
+    fail "the deploy user $OC_DEPLOY_USER does not exist"
+    return 0
+  fi
+  n=$(id -u -- "$OC_DEPLOY_USER")
+  [[ $n -ge 1 && $n -lt 1000 ]] || bad+=" [$OC_DEPLOY_USER is not a system account (id $n)]"
+  [[ $(getent passwd "$OC_DEPLOY_USER" | cut -d: -f7) == /bin/sh ]] || bad+=" [its shell is not /bin/sh]"
+  [[ $(getent passwd "$OC_DEPLOY_USER" | cut -d: -f6) == "$OC_DEPLOY_HOME" ]] || bad+=" [its home is not $OC_DEPLOY_HOME]"
+  st=$(getent shadow "$OC_DEPLOY_USER" | cut -d: -f2)
+  [[ $st == '!'* || $st == '*'* ]] || bad+=" [it has a password (the account must be locked)]"
+  [[ $(id -nG -- "$OC_DEPLOY_USER") == "$OC_DEPLOY_USER" ]] || bad+=" [it is in groups beyond its own: $(id -nG -- "$OC_DEPLOY_USER")]"
+  [[ $(stat -c '%U:%G %a' -- "$OC_DEPLOY_HOME" 2>/dev/null) == "root:root 755" ]] || bad+=" [$OC_DEPLOY_HOME is not root:root 755]"
+  [[ $(stat -c '%U:%G %a' -- "$OC_DEPLOY_SPOOL" 2>/dev/null) == "root:$OC_DEPLOY_USER 770" ]] || bad+=" [$OC_DEPLOY_SPOOL is not root:$OC_DEPLOY_USER 770]"
+
+  # 2. what it runs is root's and cannot be replaced by it
+  for f in "$OC_DEPLOY_FORCED" "$OC_DEPLOY_APPLY"; do
+    if [[ ! -f $f || -L $f ]]; then
+      bad+=" [$f is missing or not a plain file]"
+      continue
+    fi
+    [[ $(stat -c '%U:%G %a' -- "$f") == "root:root 755" ]] || bad+=" [$f is not root:root 755]"
+    dep_root_only "$f" || bad+=" [$f, or a folder above it, can be changed by someone other than root]"
+  done
+  cmp -s -- "$OC_INFRA_DIR/deploy/deploy-release.sh" "$OC_DEPLOY_FORCED" 2>/dev/null || bad+=" [$OC_DEPLOY_FORCED is not the same as infra/deploy/deploy-release.sh; rerun the bootstrap]"
+  cmp -s -- "$OC_INFRA_DIR/deploy/apply-release.sh" "$OC_DEPLOY_APPLY" 2>/dev/null || bad+=" [$OC_DEPLOY_APPLY is not the same as infra/deploy/apply-release.sh; rerun the bootstrap]"
+  grep -qx "MAX_TARBALL_BYTES=$OC_DEPLOY_MAX_BYTES" -- "$OC_DEPLOY_LIMITS" 2>/dev/null || bad+=" [$OC_DEPLOY_LIMITS does not say MAX_TARBALL_BYTES=$OC_DEPLOY_MAX_BYTES]"
+  dep_root_only "$OC_DEPLOY_LIMITS" || bad+=" [$OC_DEPLOY_LIMITS is missing, or it or a folder above it can be changed by someone other than root]"
+
+  # 3. its key file: root's, one line, the forced command and restrict, nothing else
+  if [[ ! -f $OC_DEPLOY_KEYS || -L $OC_DEPLOY_KEYS ]]; then
+    bad+=" [$OC_DEPLOY_KEYS is missing or not a plain file]"
+  else
+    [[ $(stat -c '%U:%G' -- "$OC_DEPLOY_KEYS") == root:root ]] || bad+=" [$OC_DEPLOY_KEYS is not owned by root]"
+    dep_root_only "$OC_DEPLOY_KEYS" || bad+=" [$OC_DEPLOY_KEYS, or a folder above it, can be changed by someone other than root]"
+    n=$(grep -c -v -E '^[[:space:]]*$' -- "$OC_DEPLOY_KEYS" || true)
+    if [[ $n -ne 1 ]]; then
+      bad+=" [$OC_DEPLOY_KEYS has $n lines, not exactly one key]"
+    else
+      line=$(grep -v -E '^[[:space:]]*$' -- "$OC_DEPLOY_KEYS")
+      # exactly: command="<forced command>",restrict <type> <base64> [oc-deploy-ci]
+      opts="command=\"$OC_DEPLOY_FORCED\",restrict"
+      if [[ $line != "$opts "* ]]; then
+        bad+=" [the key line must start with exactly '$opts ' (the forced command and restrict, no other option, no pty); it starts with '${line:0:100}']"
+      else
+        rest=${line#"$opts "}
+        if [[ ! $rest =~ ^(ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-nistp(256|384|521)|ssh-rsa)\ [A-Za-z0-9+/=]+(\ oc-deploy-ci)?$ ]]; then
+          bad+=" [after the options the key line is not '<key type> <key>' as the bootstrap writes it]"
+        elif ! ssh-keygen -l -f <(printf '%s\n' "$rest") >/dev/null 2>&1; then
+          bad+=" [the key in $OC_DEPLOY_KEYS does not parse]"
+        fi
+        # the CI key must not also be an admin's key
+        key=$(awk '{print $1 " " $2}' <<<"$rest")
+        for a in "${OC_ADMIN_NAMES[@]}"; do
+          f=$(getent passwd "$a" | cut -d: -f6)/.ssh/authorized_keys
+          [[ -f $f ]] || continue
+          if awk '{print $1 " " $2}' "$f" | grep -qxF -- "$key"; then
+            bad+=" [the deploy key is also the key of the admin $a]"
+          fi
+        done
+      fi
+    fi
+  fi
+
+  # 4. sudo: exactly one rule, for exactly one command and argument shape, nothing else
+  if ! oc_have sudo; then
+    bad+=" [sudo is missing, so the deploy account's rights cannot be read]"
+  else
+    out=$(sudo -ll -U "$OC_DEPLOY_USER" 2>&1) || out=""
+    entries=$(grep -c '^Sudoers entry:' <<<"$out" || true)
+    cmds=$(awk '/^[[:space:]]+Commands:/ {c = 1; next} /^[^[:space:]]/ {c = 0} /^[[:space:]]+[A-Za-z]+:/ {c = 0} c {sub(/^[ \t]+/, ""); if ($0 != "") print}' <<<"$out")
+    expect_cmd=$(dep_expected_sudo_command)
+    if [[ $entries -ne 1 ]]; then
+      bad+=" [sudo shows $entries rules for $OC_DEPLOY_USER, not exactly one]"
+    elif [[ $cmds != "$expect_cmd" ]]; then
+      bad+=" [the one sudo rule is for '${cmds:0:200}', not '$expect_cmd']"
+    fi
+    [[ $(awk '/^[[:space:]]+RunAsUsers:/ {sub(/^[ \t]+RunAsUsers:[ \t]*/, ""); print}' <<<"$out") == root ]] || bad+=" [the sudo rule does not run as root only]"
+    ! grep -q '^[[:space:]]*RunAsGroups:' <<<"$out" || bad+=" [the sudo rule names run-as groups]"
+    [[ $(awk '/^[[:space:]]+Options:/ {sub(/^[ \t]+Options:[ \t]*/, ""); print}' <<<"$out") == '!authenticate' ]] || bad+=" [the sudo rule has options other than !authenticate]"
+    line=$(grep -A1 '^Matching Defaults entries' <<<"$out" | tail -n 1)
+    [[ $line == *env_reset* && $line != *'!env_reset'* && $line != *env_keep* && $line != *env_check* ]] || bad+=" [sudo does not reset the environment for the deploy account]"
+    ! grep -Eq '(^|[[:space:],])setenv([[:space:],]|$)' <<<"$line" || bad+=" [sudo lets the deploy account set environment variables]"
+    # the file itself is exactly what the bootstrap writes
+    if [[ ! -f $OC_DEPLOY_SUDOERS ]] || ! users_deploy_sudoers | cmp -s - "$OC_DEPLOY_SUDOERS"; then
+      bad+=" [$OC_DEPLOY_SUDOERS is not exactly what the bootstrap writes]"
+    fi
+    [[ $(stat -c '%U:%G %a' -- "$OC_DEPLOY_SUDOERS" 2>/dev/null) == "root:root 440" ]] || bad+=" [$OC_DEPLOY_SUDOERS is not root:root 440]"
+  fi
+
+  # 5. sshd, asked for this user: the forced command, no terminal, no forwarding of any kind
+  if [[ -z ${SSHD_T_USER[$OC_DEPLOY_USER]:-} ]]; then
+    bad+=" [sshd gave no answer for the user $OC_DEPLOY_USER]"
+  else
+    declare -A want_ssh=(
+      [authorizedkeysfile]=$OC_DEPLOY_KEYS [forcecommand]=$OC_DEPLOY_FORCED [permittty]=no [disableforwarding]=yes
+      [allowtcpforwarding]=no [allowstreamlocalforwarding]=no [x11forwarding]=no [allowagentforwarding]=no
+      [permittunnel]=no [gatewayports]=no [permituserrc]=no [permituserenvironment]=no
+      [passwordauthentication]=no [authenticationmethods]=publickey [maxsessions]=1
+    )
+    for key in "${!want_ssh[@]}"; do
+      got=$(sshd_val_user "$OC_DEPLOY_USER" "$key")
+      [[ $got == "${want_ssh[$key]}" ]] || bad+=" [sshd: $key is '$got' for $OC_DEPLOY_USER, want '${want_ssh[$key]}']"
+    done
+  fi
+
+  if [[ -n $bad ]]; then
+    fail "the deploy account is not restricted as it should be:$bad"
+  else
+    pass "the deploy account ($OC_DEPLOY_USER): no password, no group but its own; one key line (command=$OC_DEPLOY_FORCED,restrict); sshd gives it no terminal, forwarding or agent; sudo lets it run one script with one argument shape; what it runs is root's"
+  fi
+}
+
+# check_dep_02: try, as the deploy user itself, to read what it must not read and write what it
+# must not write. Two controls come first: if the account cannot be run as at all, or cannot do
+# what it is meant to do, every "cannot" below would pass for the wrong reason, so the check fails.
+check_dep_02() {
+  local bad="" env d f
+  local -a lookat=()
+  if [[ $OC_DEPLOY_ENABLED != yes ]]; then
+    if getent passwd "$OC_DEPLOY_USER" >/dev/null; then
+      fail "the deploy account is switched off but the user $OC_DEPLOY_USER still exists"
+    else
+      pass "the deploy account is switched off; there is nobody to check"
+    fi
+    return 0
+  fi
+  if ! oc_have runuser; then
+    fail "runuser is missing, so what the deploy user can read cannot be tried"
+    return 0
+  fi
+  if ! getent passwd "$OC_DEPLOY_USER" >/dev/null; then
+    fail "the deploy user $OC_DEPLOY_USER does not exist"
+    return 0
+  fi
+  as_deploy() { runuser -u "$OC_DEPLOY_USER" -- "$@"; }
+  if ! as_deploy test -r /etc/os-release; then
+    fail "cannot run a command as $OC_DEPLOY_USER (runuser failed), so what it can read cannot be tried"
+    return 0
+  fi
+  as_deploy test -w "$OC_DEPLOY_SPOOL" || bad+=" [control: $OC_DEPLOY_USER cannot write its own spool folder $OC_DEPLOY_SPOOL]"
+
+  # not readable: the secrets folder (and every file in it) and every environment's data
+  if as_deploy ls -- "$OC_SECRET_DIR" >/dev/null 2>&1; then bad+=" [can list $OC_SECRET_DIR]"; fi
+  for f in "$OC_SECRET_DIR"/*; do
+    [[ -e $f ]] || continue
+    if as_deploy test -r "$f"; then bad+=" [can read $f]"; fi
+  done
+  for env in "${OC_ENV_LIST[@]}"; do
+    lookat=("$OC_DATA_ROOT/$env" "$OC_DATA_ROOT/$env/media" "$OC_DATA_ROOT/$env/private" "$OC_DATA_ROOT/$env/tmp" "$(oc_env_home "$env")" "$(oc_env_quadlet_dir "$env")")
+    for d in "${lookat[@]}"; do
+      if [[ ! -d $d ]]; then
+        bad+=" [$d does not exist, so it cannot be checked]"
+        continue
+      fi
+      if as_deploy test -r "$d"; then bad+=" [can read $d]"; fi
+      if as_deploy test -x "$d"; then bad+=" [can enter $d]"; fi
+    done
+  done
+  # not writable: its own home, the configuration, what it runs, the sudo and sshd files
+  for f in "$OC_DEPLOY_HOME" "$OC_SECRET_DIR" "$OC_DATA_ROOT" /etc /etc/sudoers.d /etc/ssh /etc/ssh/sshd_config.d "$OC_DEPLOY_DIR" "$OC_DEPLOY_FORCED" \
+    "$OC_DEPLOY_APPLY" "$OC_DEPLOY_LIMITS" "$OC_DEPLOY_KEYS" "$OC_DEPLOY_SUDOERS" /usr/local/sbin /usr/local/bin; do
+    [[ -e $f ]] || continue
+    if as_deploy test -w "$f"; then bad+=" [can write $f]"; fi
+  done
+  # and it cannot become anyone else: sudo allows nothing but the one script
+  if as_deploy sudo -n true >/dev/null 2>&1; then bad+=" [sudo -n true works for $OC_DEPLOY_USER]"; fi
+  if as_deploy sudo -n -i true >/dev/null 2>&1; then bad+=" [a root shell through sudo works for $OC_DEPLOY_USER]"; fi
+
+  if [[ -n $bad ]]; then
+    fail "the deploy user reaches what it must not:$bad"
+  else
+    pass "the deploy user cannot read $OC_SECRET_DIR or any environment's data folder or home, cannot write anywhere but its spool folder, and cannot run any other command through sudo"
+  fi
 }
 
 # --- network -----------------------------------------------------------------------
@@ -782,7 +1043,7 @@ Q_US=$'\037'
 q_allowed_keys() {
   case $1 in
     Unit) echo "Description" ;;
-    Container) echo "ContainerName Image UserNS User Group ReadOnly DropCapability NoNewPrivileges Tmpfs PidsLimit PodmanArgs Environment EnvironmentFile Network PublishPort Volume HealthCmd HealthInterval HealthTimeout HealthRetries HealthStartPeriod" ;;
+    Container) echo "ContainerName Image Pull UserNS User Group ReadOnly DropCapability NoNewPrivileges Tmpfs PidsLimit PodmanArgs Environment EnvironmentFile Network PublishPort Volume HealthCmd HealthInterval HealthTimeout HealthRetries HealthStartPeriod" ;;
     Service) echo "Restart RestartSec TimeoutStartSec TimeoutStopSec" ;;
     Install) echo "WantedBy" ;;
     *) return 1 ;;
@@ -861,11 +1122,12 @@ q_check_container() {
   done <<<"$qn"
 
   # 2. Keys that must appear exactly once, with exactly the right value.
-  for key in ContainerName Image UserNS User Group ReadOnly DropCapability NoNewPrivileges PidsLimit EnvironmentFile Network Tmpfs HealthCmd PublishPort; do
+  for key in ContainerName Image Pull UserNS User Group ReadOnly DropCapability NoNewPrivileges PidsLimit EnvironmentFile Network Tmpfs HealthCmd PublishPort; do
     n=$(qcount Container "$key")
     [[ $n -eq 1 ]] || echo "$key appears $n times (exactly one is needed)"
   done
   [[ $(qget Container ContainerName) == "oc-$role-$env" ]] || echo "ContainerName is not oc-$role-$env"
+  [[ $(qget Container Pull) == never ]] || echo "Pull is not never (a missing image must never be fetched from a registry)"
   [[ $(qget Container UserNS) == keep-id ]] || echo "UserNS is not keep-id"
   v=$(qget Container User)
   [[ $v == "$uid" && $uid -ne 0 ]] || echo "User is not the environment user's id ($uid), or is root"
@@ -978,7 +1240,7 @@ q_check_generated() {
         seen[$flag]=1
         continue
         ;;
-      --name | --cidfile | --cgroups | --network | --sdnotify | --security-opt | --pids-limit | --cap-drop | --user | --userns | --tmpfs | -v | --publish | --env | --env-file | --health-cmd | --health-interval | --health-retries | --health-start-period | --health-timeout | --group-add | --memory | --memory-swap)
+      --name | --cidfile | --cgroups | --network | --sdnotify | --security-opt | --pids-limit | --cap-drop | --user | --userns | --tmpfs | -v | --publish | --env | --env-file | --health-cmd | --health-interval | --health-retries | --health-start-period | --health-timeout | --group-add | --memory | --memory-swap | --pull)
         if ((!hasval)); then
           val=${tok[$i]:-}
           i=$((i + 1))
@@ -999,6 +1261,7 @@ q_check_generated() {
       --user) [[ $val == "$uid:$gid" ]] || echo "--user is '$val', not $uid:$gid" ;;
       --pids-limit) [[ $val =~ ^[1-9][0-9]*$ ]] || echo "--pids-limit '$val' is not a positive number" ;;
       --memory | --memory-swap) [[ $val =~ ^[1-9][0-9]*[kKmMgG]?$ ]] || echo "$flag '$val' is not a size" ;;
+      --pull) [[ $val == never ]] || echo "--pull is '$val', not never" ;;
       --tmpfs) [[ $val == /tmp* ]] || echo "--tmpfs '$val' is not for /tmp" ;;
       --publish) [[ $val == "127.0.0.1:$hp:$ip" ]] || echo "--publish '$val' is not exactly 127.0.0.1:$hp:$ip" ;;
       --env-file) [[ $val == "$(q_env_file "$env" "$role")" ]] || echo "--env-file is '$val', not $(q_env_file "$env" "$role")" ;;
@@ -1019,7 +1282,7 @@ q_check_generated() {
     esac
   done
   ((seen_image)) || echo "the generated command has no image"
-  for flag in --read-only --cap-drop --security-opt --userns --user --pids-limit --memory --publish --network --env-file --tmpfs --health-cmd; do
+  for flag in --read-only --cap-drop --security-opt --userns --user --pids-limit --memory --publish --network --env-file --tmpfs --health-cmd --pull; do
     [[ -n ${seen[$flag]:-} ]] || missing+=("$flag")
   done
   [[ ${#missing[@]} -eq 0 ]] || echo "the generated command lacks: ${missing[*]}"
@@ -1492,6 +1755,7 @@ check_svc_03() {
 # --- runner ------------------------------------------------------------------------
 CHECKS=(
   "SSH-01 check_ssh_01" "SSH-02 check_ssh_02" "SSH-03 check_ssh_03" "SSH-04 check_ssh_04" "SSH-05 check_ssh_05"
+  "DEP-01 check_dep_01" "DEP-02 check_dep_02"
   "NET-01 check_net_01" "NET-02 check_net_02" "NET-03 check_net_03" "NET-04 check_net_04" "NET-05 check_net_05" "NET-06 check_net_06"
   "NGX-01 check_ngx_01"
   "OS-01 check_os_01" "OS-02 check_os_02" "OS-03 check_os_03" "OS-04 check_os_04" "OS-05 check_os_05"

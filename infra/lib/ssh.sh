@@ -10,8 +10,44 @@
 #  5. a running session is never cut: restarting sshd leaves open sessions alone.
 # shellcheck shell=bash
 
-# The one place that decides who may sign in. Task 4 adds the restricted deploy user here.
-ssh_allowed_users() { printf '%s' "${OC_ADMIN_NAMES[*]}"; }
+# The one place that decides who may sign in: the named admins, and the restricted deploy
+# account when it is switched on. The drop-in's AllowUsers, the bootstrap's own check of the
+# live rules (ssh_assert_effective) and the verifier's SSH-03 all read this.
+ssh_allowed_users() {
+  if [[ ${OC_DEPLOY_ENABLED:-no} == yes ]]; then
+    printf '%s' "${OC_ADMIN_NAMES[*]} $OC_DEPLOY_USER"
+  else
+    printf '%s' "${OC_ADMIN_NAMES[*]}"
+  fi
+}
+
+# ssh_deploy_match: the rules that apply to the deploy account only. It signs in with a key
+# from a root-owned file, and sshd runs only the forced command for it, with no terminal, no
+# forwarding of any kind, no agent, no X11, no tunnel and no user rc file. (The key's own line
+# in that file says the same again: command= and restrict.)
+ssh_deploy_match() {
+  [[ ${OC_DEPLOY_ENABLED:-no} == yes ]] || return 0
+  cat <<EOF
+
+# The restricted deploy account (infra/deploy). Keep this block LAST in the file: a Match
+# block runs to the end of the file it is in.
+Match User $OC_DEPLOY_USER
+    AuthorizedKeysFile $OC_DEPLOY_KEYS
+    AuthenticationMethods publickey
+    ForceCommand $OC_DEPLOY_FORCED
+    PermitTTY no
+    DisableForwarding yes
+    X11Forwarding no
+    AllowAgentForwarding no
+    AllowTcpForwarding no
+    AllowStreamLocalForwarding no
+    PermitTunnel no
+    GatewayPorts no
+    PermitUserRC no
+    PermitUserEnvironment no
+    MaxSessions 1
+EOF
+}
 
 ssh_render_dropin() {
   cat <<EOF
@@ -45,6 +81,7 @@ ClientAliveCountMax 2
 # Ciphers, key exchange and MACs stay at the OpenSSH 9.6 defaults: they are already
 # modern, and a hand-edited list ages worse than the vendor's.
 EOF
+  ssh_deploy_match
 }
 
 # ssh_port_listening PORT: is anything listening on that TCP port?
@@ -52,10 +89,44 @@ ssh_port_listening() {
   ss -H -ltn 2>/dev/null | awk -v p=":$1" '$4 ~ (p "$") {found = 1} END {exit !found}'
 }
 
-# ssh_effective KEY: the value of KEY in the effective configuration. sshd -T prints a
-# key that takes several values (AllowUsers) once per value, so the values are joined.
+# ssh_effective KEY [USER]: the value of KEY in the effective configuration, as it applies to
+# USER (a Match block can change a value for one user, so `sshd -T -C user=USER,...` is asked,
+# not just `sshd -T`). sshd -T prints a key that takes several values (AllowUsers) once per
+# value, so the values are joined.
 ssh_effective() {
-  sshd -T 2>/dev/null | awk -v k="$1" '$1 == k {$1 = ""; sub(/^ /, ""); v = (v == "" ? $0 : v " " $0)} END {print v}'
+  local -a conn=()
+  if [[ -n ${2:-} ]]; then
+    conn=(-C "user=$2,host=x,addr=203.0.113.1")
+  fi
+  sshd -T "${conn[@]}" 2>/dev/null | awk -v k="$1" '$1 == k {$1 = ""; sub(/^ /, ""); v = (v == "" ? $0 : v " " $0)} END {print v}'
+}
+
+# ssh_foreign_match: prints one line for every Match line, and every Include other than the
+# stock one, in the sshd configuration that is not ours. A Match block can switch passwords or
+# root login back on for some connections (an address, a group, a user) in a way that asking
+# sshd about a few sample users would never show, so any other one is a finding. Our own is
+# `Match User <deploy user>`, in our drop-in, and only while the deploy account is on.
+ssh_foreign_match() {
+  local f line norm own=""
+  if [[ ${OC_DEPLOY_ENABLED:-no} == yes ]]; then
+    own="match user ${OC_DEPLOY_USER,,}"
+  fi
+  for f in /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf; do
+    [[ -f $f ]] || continue
+    while IFS= read -r line || [[ -n $line ]]; do
+      norm=$(printf '%s' "$line" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')
+      norm=${norm,,}
+      case $norm in
+        match | match\ * | match=*)
+          [[ $f == "$OC_SSHD_DROPIN" && -n $own && $norm == "$own" ]] || printf '%s: %s\n' "$f" "$line"
+          ;;
+        include | include\ * | include=*)
+          [[ $f == /etc/ssh/sshd_config && $norm == 'include /etc/ssh/sshd_config.d/*.conf' ]] || printf '%s: %s\n' "$f" "$line"
+          ;;
+        *) ;;
+      esac
+    done <"$f"
+  done
 }
 
 ssh_require_admin_ready() {
@@ -76,24 +147,55 @@ ssh_require_admin_ready() {
 # ssh_assert_effective: the live rules say what we asked for. Catches a drop-in that is
 # not included, or an earlier file that overrides ours.
 ssh_assert_effective() {
-  local got want key
+  local got want key user foreign
+  local -a users=()
   declare -A expect=(
     [port]=$OC_SSH_PORT
     [permitrootlogin]=no
     [passwordauthentication]=no
     [kbdinteractiveauthentication]=no
     [pubkeyauthentication]=yes
+    [authenticationmethods]=publickey
     [maxauthtries]=3
     [x11forwarding]=no
     [allowagentforwarding]=no
   )
-  for key in "${!expect[@]}"; do
-    got=$(ssh_effective "$key")
-    want=${expect[$key]}
-    [[ $got == "$want" ]] || oc_die "sshd would use '$key $got' instead of '$key $want'. Another file in /etc/ssh overrides $OC_SSHD_DROPIN; nothing was reloaded."
+  # What the deploy account gets on top (its Match block): a root-owned key file, the forced
+  # command, and no terminal, forwarding, tunnel or user rc.
+  declare -A deploy_expect=(
+    [authorizedkeysfile]=$OC_DEPLOY_KEYS
+    [forcecommand]=$OC_DEPLOY_FORCED
+    [permittty]=no
+    [disableforwarding]=yes
+    [allowtcpforwarding]=no
+    [allowstreamlocalforwarding]=no
+    [permittunnel]=no
+    [gatewayports]=no
+    [permituserrc]=no
+    [permituserenvironment]=no
+    [maxsessions]=1
+  )
+  # A Match block that is not ours could change these for some connections only.
+  foreign=$(ssh_foreign_match)
+  [[ -z $foreign ]] || oc_die "the sshd configuration has a Match or Include line that this setup did not write ($(printf '%s' "$foreign" | head -n 1)); it could change the rules above for some connections. Nothing was reloaded."
+  # The rules are asked per user: a Match block can change a value for one user.
+  read -r -a users <<<"$(ssh_allowed_users)"
+  for user in "${users[@]}"; do
+    for key in "${!expect[@]}"; do
+      got=$(ssh_effective "$key" "$user")
+      want=${expect[$key]}
+      [[ $got == "$want" ]] || oc_die "sshd would use '$key $got' instead of '$key $want' for $user. Another file in /etc/ssh overrides $OC_SSHD_DROPIN; nothing was reloaded."
+    done
+    if [[ ${OC_DEPLOY_ENABLED:-no} == yes && $user == "$OC_DEPLOY_USER" ]]; then
+      for key in "${!deploy_expect[@]}"; do
+        got=$(ssh_effective "$key" "$user")
+        want=${deploy_expect[$key]}
+        [[ $got == "$want" ]] || oc_die "sshd would use '$key $got' instead of '$key $want' for $user; the Match block did not take effect. Nothing was reloaded."
+      done
+    fi
   done
   got=$(ssh_effective allowusers | tr ' ' '\n' | sort | tr '\n' ' ')
-  want=$(printf '%s\n' "${OC_ADMIN_NAMES[@]}" | sort | tr '\n' ' ')
+  want=$(ssh_allowed_users | tr ' ' '\n' | sort | tr '\n' ' ')
   [[ $got == "$want" ]] || oc_die "sshd would allow '$got' instead of '$want'; nothing was reloaded."
 }
 
