@@ -780,7 +780,7 @@ done
 
 # ======================================================================================
 # deploy-release.sh: the forced command run as the restricted deploy user
-section "deploy-release: the forced command"
+section "deploy-release: the forced command (one key per environment: the key fixes the environment)"
 new_deploy() { # NAME
   new_case "$1"
   DEPLOY_ENV=(
@@ -788,99 +788,114 @@ new_deploy() { # NAME
   )
   rm -f "$SPOOL_DIR"/*
 }
-# run_deploy STDIN-TEXT ARGS...: the forced command, with the given stdin
+GOOD="$SHA_NEW $CMS_ID $WEB_ID" # what CI sends: the commit and the two image ids, no environment
+# run_deploy ENV STDIN-TEXT [CLIENT-COMMAND]: the forced command of that environment's key (it is
+# started with ENV as its one argument), the client's command line in SSH_ORIGINAL_COMMAND
+# (left unset when no command is given), STDIN-TEXT as the tarball.
 run_deploy() {
-  local input=$1
-  shift
+  local envarg=$1 input=$2
   RC=0
-  printf '%s' "$input" | env "${DEPLOY_ENV[@]}" bash "$DEPLOY" "$@" >"$OUT" 2>&1 || RC=$?
+  if [[ $# -ge 3 ]]; then
+    printf '%s' "$input" | env "${DEPLOY_ENV[@]}" SSH_ORIGINAL_COMMAND="$3" bash "$DEPLOY" "$envarg" >"$OUT" 2>&1 || RC=$?
+  else
+    printf '%s' "$input" | env "${DEPLOY_ENV[@]}" bash "$DEPLOY" "$envarg" >"$OUT" 2>&1 || RC=$?
+  fi
 }
+no_spool_left() { [[ -z $(find "$SPOOL_DIR" -mindepth 1 ! -name .lock) ]]; }
+nothing_reached_apply() { [[ ! -e $S/apply.args ]] && no_spool_left; }
+
 new_deploy d-ok
-run_deploy "TARBALL-BYTES" prod "$SHA_NEW" "$CMS_ID" "$WEB_ID"
-if [[ $RC -eq 0 ]]; then ok "deploy-release: good arguments and a tarball on stdin exit 0"; else notok "deploy-release: exits $RC"; show_out; fi
-check "deploy-release: apply-release gets exactly the four arguments" grep -qx "prod $SHA_NEW $CMS_ID $WEB_ID" "$S/apply.args"
+run_deploy prod "TARBALL-BYTES" "$GOOD"
+if [[ $RC -eq 0 ]]; then ok "deploy-release: the environment from the key (argument prod), three values from SSH_ORIGINAL_COMMAND and a tarball on stdin exit 0"; else notok "deploy-release: exits $RC"; show_out; fi
+check "deploy-release: apply-release gets the environment from the key and the three values, four arguments in all" grep -qx "prod $SHA_NEW $CMS_ID $WEB_ID" "$S/apply.args"
 check "deploy-release: apply-release saw the tarball as the spool file" bash -c "[[ \$(cat '$S/apply.saw-spool') == TARBALL-BYTES ]]"
 check "deploy-release: the spool file is gone afterwards" test ! -e "$SPOOL_DIR/incoming.tar.gz"
-check "deploy-release: no part file is left" bash -c "[[ -z \$(ls -A '$SPOOL_DIR' | grep -v '^.lock\$') ]]"
+check "deploy-release: no part file is left" no_spool_left
 
-new_deploy d-ssh
-RC=0
-printf 'TB' | env "${DEPLOY_ENV[@]}" SSH_ORIGINAL_COMMAND="prod $SHA_NEW $CMS_ID $WEB_ID" bash "$DEPLOY" >"$OUT" 2>&1 || RC=$?
-if [[ $RC -eq 0 ]]; then ok "deploy-release: the arguments can come from SSH_ORIGINAL_COMMAND (the forced-command way)"; else notok "SSH_ORIGINAL_COMMAND: exits $RC"; show_out; fi
-check "deploy-release: ... and reach apply-release unchanged" grep -qx "prod $SHA_NEW $CMS_ID $WEB_ID" "$S/apply.args"
+new_deploy d-staging
+run_deploy staging "TB" "$GOOD"
+if [[ $RC -eq 0 ]]; then ok "deploy-release: the staging key (argument staging) deploys staging: exits 0"; else notok "staging key: exits $RC"; show_out; fi
+check "deploy-release: ... and apply-release is told staging" grep -qx "staging $SHA_NEW $CMS_ID $WEB_ID" "$S/apply.args"
 
-ssh_bad() { # DESCRIPTION COMMAND-STRING
+ssh_bad() { # DESCRIPTION ENV-ARGUMENT [CLIENT-COMMAND]
   new_deploy d-ssh-bad
-  RC=0
-  printf 'TB' | env "${DEPLOY_ENV[@]}" SSH_ORIGINAL_COMMAND="$2" bash "$DEPLOY" >"$OUT" 2>&1 || RC=$?
+  if [[ $# -ge 3 ]]; then run_deploy "$2" TB "$3"; else run_deploy "$2" TB; fi
   if [[ $RC -eq 2 ]]; then ok "deploy-release: $1 exits 2"; else notok "deploy-release: $1 exits $RC (wanted 2)"; show_out; fi
-  check "deploy-release: $1: apply-release was not called and nothing was spooled" bash -c "[[ ! -e '$S/apply.args' && -z \$(ls -A '$SPOOL_DIR' | grep -v '^.lock\$') ]]"
+  check "deploy-release: $1: apply-release was not called and nothing was spooled" nothing_reached_apply
 }
-ssh_bad "a shell command" "id"
-ssh_bad "a command after the arguments" "prod $SHA_NEW $CMS_ID $WEB_ID; cat /etc/shadow"
-ssh_bad "a command in front of the arguments" "cat /etc/shadow; prod $SHA_NEW $CMS_ID $WEB_ID"
-ssh_bad "command substitution in the sha" "prod \$(id)$SHA_NEW $CMS_ID $WEB_ID"
-ssh_bad "an extra word" "prod $SHA_NEW $CMS_ID $WEB_ID --force"
-ssh_bad "a missing word" "prod $SHA_NEW $CMS_ID"
-ssh_bad "two spaces between words" "prod  $SHA_NEW $CMS_ID $WEB_ID"
-ssh_bad "a newline in the command" "prod $SHA_NEW $CMS_ID $WEB_ID"$'\n'"id"
-ssh_bad "a bad environment" "dev $SHA_NEW $CMS_ID $WEB_ID"
-ssh_bad "an empty command" ""
-ssh_bad "an scp or sftp request" "scp -t /tmp"
-ssh_bad "a path in place of the environment" "../../prod $SHA_NEW $CMS_ID $WEB_ID"
+# a client that names an environment, or sends any other number of words, is refused
+ssh_bad "the client's command names the environment (prod, on the prod key)" prod "prod $GOOD"
+ssh_bad "the client's command names another environment (prod, on the staging key)" staging "prod $GOOD"
+ssh_bad "the client's command names staging on the prod key" prod "staging $GOOD"
+ssh_bad "the client's command names a made-up environment" prod "dev $GOOD"
+ssh_bad "the client's command is only an environment" prod "prod"
+ssh_bad "the client sends two words" prod "$SHA_NEW $CMS_ID"
+ssh_bad "the client sends one word" prod "$SHA_NEW"
+ssh_bad "the client sends four words (a fourth, after the three)" prod "$GOOD extra"
+ssh_bad "the client sends four words (the old shape: environment first)" staging "staging $GOOD"
+ssh_bad "a shell command" prod "id"
+ssh_bad "a command after the values" prod "$GOOD; cat /etc/shadow"
+ssh_bad "a command in front of the values" prod "cat /etc/shadow; $GOOD"
+ssh_bad "command substitution in the commit" prod "\$(id)$SHA_NEW $CMS_ID $WEB_ID"
+ssh_bad "two spaces between words" prod "$SHA_NEW  $CMS_ID $WEB_ID"
+ssh_bad "a newline in the command" prod "$GOOD"$'\n'"id"
+ssh_bad "an empty command" prod ""
+ssh_bad "an scp or sftp request" prod "scp -t /tmp"
+ssh_bad "a 39-character commit" prod "${SHA_NEW:0:39} $CMS_ID $WEB_ID"
+ssh_bad "a path as the commit" prod "../x $CMS_ID $WEB_ID"
+ssh_bad "a short web image id" prod "$SHA_NEW $CMS_ID sha256:short"
+ssh_bad "an upper-case CMS image id" prod "$SHA_NEW sha256:${CMS_ID:7:63}A $WEB_ID"
+# a bad or missing argument from the forced command
+ssh_bad "no command at all (an interactive login: the key's forced command gives only the environment)" prod
+ssh_bad "an environment argument that is not prod or staging (dev)" dev "$GOOD"
+ssh_bad "an environment argument in upper case (Prod)" Prod "$GOOD"
+ssh_bad "an empty environment argument" "" "$GOOD"
+ssh_bad "a path as the environment argument" ../prod "$GOOD"
 
-new_deploy d-both
+new_deploy d-noarg
 RC=0
-printf 'TB' | env "${DEPLOY_ENV[@]}" SSH_ORIGINAL_COMMAND="prod $SHA_NEW $CMS_ID $WEB_ID" bash "$DEPLOY" prod "$SHA_NEW" "$CMS_ID" "$WEB_ID" >"$OUT" 2>&1 || RC=$?
-if [[ $RC -eq 2 ]]; then ok "deploy-release: arguments and SSH_ORIGINAL_COMMAND together are refused (exit 2)"; else notok "both sources: exits $RC"; fi
-
-new_deploy d-none
-run_deploy "TB"
-if [[ $RC -eq 2 ]]; then ok "deploy-release: no arguments and no SSH_ORIGINAL_COMMAND (an interactive login) exits 2"; else notok "no command: exits $RC"; fi
-
-new_deploy d-badargs
-run_deploy "TB" dev "$SHA_NEW" "$CMS_ID" "$WEB_ID"
-if [[ $RC -eq 2 ]]; then ok "deploy-release: bad env exits 2"; else notok "d bad env: $RC"; fi
-run_deploy "TB" prod "${SHA_NEW:0:39}" "$CMS_ID" "$WEB_ID"
-if [[ $RC -eq 2 ]]; then ok "deploy-release: a 39-character sha exits 2"; else notok "d 39-char sha: $RC"; fi
-run_deploy "TB" prod ../x "$CMS_ID" "$WEB_ID"
-if [[ $RC -eq 2 ]]; then ok "deploy-release: ../x as the sha exits 2"; else notok "d ../x: $RC"; fi
-run_deploy "TB" prod "$SHA_NEW" "$CMS_ID" "sha256:short"
-if [[ $RC -eq 2 ]]; then ok "deploy-release: a short image id exits 2"; else notok "d short id: $RC"; fi
-check "deploy-release: none of those reached apply-release" test ! -e "$S/apply.args"
+printf 'TB' | env "${DEPLOY_ENV[@]}" SSH_ORIGINAL_COMMAND="$GOOD" bash "$DEPLOY" >"$OUT" 2>&1 || RC=$?
+if [[ $RC -eq 2 ]]; then ok "deploy-release: started with no environment argument exits 2"; else notok "no argument: exits $RC"; fi
+RC=0
+printf 'TB' | env "${DEPLOY_ENV[@]}" SSH_ORIGINAL_COMMAND="$GOOD" bash "$DEPLOY" prod staging >"$OUT" 2>&1 || RC=$?
+if [[ $RC -eq 2 ]]; then ok "deploy-release: started with two arguments exits 2"; else notok "two arguments: exits $RC"; fi
+RC=0
+printf 'TB' | env "${DEPLOY_ENV[@]}" bash "$DEPLOY" prod "$SHA_NEW" "$CMS_ID" "$WEB_ID" >"$OUT" 2>&1 || RC=$?
+if [[ $RC -eq 2 ]]; then ok "deploy-release: the old four-argument form (environment, commit, two ids) exits 2"; else notok "four arguments: exits $RC"; fi
+check "deploy-release: none of those reached apply-release" nothing_reached_apply
 
 new_deploy d-rc
 echo 3 >"$S/apply-rc"
-run_deploy "TB" prod "$SHA_NEW" "$CMS_ID" "$WEB_ID"
+run_deploy prod "TB" "$GOOD"
 if [[ $RC -eq 3 ]]; then ok "deploy-release: passes apply-release's exit status through (3)"; else notok "rc passthrough: $RC"; fi
 echo 1 >"$S/apply-rc"
-run_deploy "TB" prod "$SHA_NEW" "$CMS_ID" "$WEB_ID"
+run_deploy prod "TB" "$GOOD"
 if [[ $RC -eq 1 ]]; then ok "deploy-release: passes apply-release's exit status through (1)"; else notok "rc passthrough 1: $RC"; fi
 check "deploy-release: the spool file is deleted after a failed apply too" test ! -e "$SPOOL_DIR/incoming.tar.gz"
 
 new_deploy d-big
 MAXB=10
 DEPLOY_ENV=("${DEPLOY_ENV[@]/OC_MAX_TARBALL_BYTES=*/OC_MAX_TARBALL_BYTES=10}")
-run_deploy "0123456789ABC" prod "$SHA_NEW" "$CMS_ID" "$WEB_ID"
+run_deploy prod "0123456789ABC" "$GOOD"
 if [[ $RC -eq 5 ]]; then ok "deploy-release: a tarball over the limit exits 5"; else notok "too big: exits $RC (wanted 5)"; show_out; fi
 check "deploy-release: ... apply-release was not called" test ! -e "$S/apply.args"
-check "deploy-release: ... and nothing is left in the spool" bash -c "[[ -z \$(ls -A '$SPOOL_DIR' | grep -v '^.lock\$') ]]"
-run_deploy "0123456789" prod "$SHA_NEW" "$CMS_ID" "$WEB_ID"
+check "deploy-release: ... and nothing is left in the spool" no_spool_left
+run_deploy prod "0123456789" "$GOOD"
 if [[ $RC -eq 0 ]]; then ok "deploy-release: a tarball exactly at the limit is accepted"; else notok "at the limit: exits $RC"; show_out; fi
 MAXB=
 
 new_deploy d-empty
-run_deploy "" prod "$SHA_NEW" "$CMS_ID" "$WEB_ID"
+run_deploy prod "" "$GOOD"
 if [[ $RC -eq 5 ]]; then ok "deploy-release: an empty stdin exits 5"; else notok "empty stdin: exits $RC"; fi
 
 new_deploy d-stale
 printf 'OLD' >"$SPOOL_DIR/incoming.tar.gz"
-run_deploy "NEW-TARBALL" prod "$SHA_NEW" "$CMS_ID" "$WEB_ID"
+run_deploy prod "NEW-TARBALL" "$GOOD"
 check "deploy-release: a stale spool file is replaced, never mixed in" bash -c "[[ \$(cat '$S/apply.saw-spool') == NEW-TARBALL ]]"
 
 new_deploy d-lock
 hold_lock "$SPOOL_DIR/.lock"
-run_deploy "TB" prod "$SHA_NEW" "$CMS_ID" "$WEB_ID"
+run_deploy prod "TB" "$GOOD"
 release_lock
 if [[ $RC -eq 4 ]]; then ok "deploy-release: a second deploy at the same time is refused (exit 4)"; else notok "d concurrent: exits $RC (wanted 4)"; show_out; fi
 check "deploy-release: ... without calling apply-release" test ! -e "$S/apply.args"

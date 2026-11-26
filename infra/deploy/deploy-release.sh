@@ -1,24 +1,28 @@
 #!/bin/bash
-# deploy-release ENV SHA CMS-IMAGE-ID WEB-IMAGE-ID    (tarball on standard input)
+# deploy-release ENV                  (SHA CMS-IMAGE-ID WEB-IMAGE-ID in $SSH_ORIGINAL_COMMAND; tarball on stdin)
 #
-# The SSH forced command of the deploy account (oc-deploy). The deploy key's line in
-# authorized_keys is
+# The SSH forced command of the deploy account (oc-deploy). There is one deploy key PER
+# ENVIRONMENT, and each key's line in the root-owned authorized_keys file fixes the environment:
 #
-#     command="/usr/local/lib/oc/deploy/deploy-release",restrict ssh-ed25519 AAAA...
+#     command="/usr/local/lib/oc/deploy/deploy-release prod",restrict ssh-ed25519 AAAA... oc-deploy-prod
+#     command="/usr/local/lib/oc/deploy/deploy-release staging",restrict ssh-ed25519 AAAA... oc-deploy-staging
 #
-# so whatever the client asks for, this program runs instead, and the client's command line
-# arrives in $SSH_ORIGINAL_COMMAND (sshd passes no arguments to a forced command). CI asks for
+# So whatever the client asks for, this program runs instead, with the environment as its one
+# argument; a staging key can never deploy production, and a client cannot name an environment.
+# The client's own command line arrives in $SSH_ORIGINAL_COMMAND (sshd passes it no other way).
+# CI asks for exactly
 #
-#     prod 0123...(40 hex) sha256:...(64 hex) sha256:...(64 hex)
+#     0123...(40 hex) sha256:...(64 hex) sha256:...(64 hex)
 #
-# and sends the gzip tarball of the two images (docker save) on standard input.
+# (the commit, the CMS image id and the web image id) and sends the gzip tarball of the two images
+# (docker save) on standard input. A word naming an environment there, or any other number of
+# words, is refused: exit 2, nothing else happens.
 #
-# This program runs as the unprivileged deploy user. It checks the four values strictly (exit
-# 2 and nothing else happens if they are wrong), takes a lock so two uploads cannot overlap
-# (exit 4), copies standard input into the one spool file, capped in size (exit 5), and then
-# hands over to the root-owned apply-release.sh through the one sudo rule the deploy user has.
-# Whatever apply-release.sh exits with is this program's exit status. The spool file is deleted
-# afterwards in every case.
+# This program runs as the unprivileged deploy user. It checks the values strictly, takes a lock so
+# two uploads cannot overlap (exit 4), copies standard input into the one spool file, capped in size
+# (exit 5), and then hands over to the root-owned apply-release.sh through the one sudo rule the
+# deploy user has. Whatever apply-release.sh exits with is this program's exit status. The spool
+# file is deleted afterwards in every case.
 #
 # It reads, writes and runs nothing else: the spool directory is the only place the deploy user
 # can write (a folder root created for it). The environment, secrets and apps are out of reach.
@@ -32,8 +36,8 @@ umask 077
 unset BASH_ENV ENV CDPATH
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 
-# Exactly the shape CI sends; the same patterns as apply-release.sh.
-RE_COMMAND='^(prod|staging) [0-9a-f]{40} sha256:[0-9a-f]{64} sha256:[0-9a-f]{64}$'
+# Exactly the shape CI sends after the environment; the same patterns as apply-release.sh.
+RE_REST='^[0-9a-f]{40} sha256:[0-9a-f]{64} sha256:[0-9a-f]{64}$'
 RE_ENV='^(prod|staging)$'
 RE_SHA='^[0-9a-f]{40}$'
 RE_ID='^sha256:[0-9a-f]{64}$'
@@ -69,26 +73,21 @@ main() {
   local env_name sha cms_id web_id
   local -a words=()
 
-  # --- the four values: from the arguments (a person at a terminal, or a test), or from
-  # $SSH_ORIGINAL_COMMAND (the forced-command way); never both, and nothing else.
-  if [[ $# -gt 0 ]]; then
-    [[ -z ${SSH_ORIGINAL_COMMAND:-} ]] || die 2 "arguments and an SSH command were both given; refusing"
-    [[ $# -eq 4 ]] || die 2 "usage: deploy-release prod|staging SHA CMS-IMAGE-ID WEB-IMAGE-ID  (tarball on stdin)"
-    words=("$@")
-  else
-    [[ -n ${SSH_ORIGINAL_COMMAND:-} ]] || die 2 "no command given. This account only runs deploys: ssh ... 'prod SHA CMS-IMAGE-ID WEB-IMAGE-ID' < images.tar.gz"
-    [[ $SSH_ORIGINAL_COMMAND =~ $RE_COMMAND ]] || die 2 "the command must be exactly: prod|staging SHA CMS-IMAGE-ID WEB-IMAGE-ID"
-    IFS=' ' read -r -a words <<<"$SSH_ORIGINAL_COMMAND"
-  fi
-  [[ ${#words[@]} -eq 4 ]] || die 2 "expected four values"
-  [[ ${words[0]} =~ $RE_ENV ]] || die 2 "the environment must be exactly prod or staging"
-  [[ ${words[1]} =~ $RE_SHA ]] || die 2 "the commit must be exactly 40 lower-case hex characters"
-  [[ ${words[2]} =~ $RE_ID ]] || die 2 "the CMS image id must be sha256: and 64 lower-case hex characters"
-  [[ ${words[3]} =~ $RE_ID ]] || die 2 "the web image id must be sha256: and 64 lower-case hex characters"
-  env_name=${words[0]}
-  sha=${words[1]}
-  cms_id=${words[2]}
-  web_id=${words[3]}
+  # --- the environment: the one argument the forced command of the key line gives (the key fixes
+  # it; nothing the client sends can change it). Then the three values the client sends.
+  [[ $# -eq 1 ]] || die 2 "this program is started by the forced command of a deploy key, with the environment as its one argument"
+  [[ $1 =~ $RE_ENV ]] || die 2 "the environment must be exactly prod or staging"
+  env_name=$1
+  [[ -n ${SSH_ORIGINAL_COMMAND:-} ]] || die 2 "no command given. This account only runs deploys: ssh ... 'SHA CMS-IMAGE-ID WEB-IMAGE-ID' < images.tar.gz"
+  [[ $SSH_ORIGINAL_COMMAND =~ $RE_REST ]] || die 2 "the command must be exactly: SHA CMS-IMAGE-ID WEB-IMAGE-ID (the environment is fixed by the key, and is not part of the command)"
+  IFS=' ' read -r -a words <<<"$SSH_ORIGINAL_COMMAND"
+  [[ ${#words[@]} -eq 3 ]] || die 2 "expected three values"
+  [[ ${words[0]} =~ $RE_SHA ]] || die 2 "the commit must be exactly 40 lower-case hex characters"
+  [[ ${words[1]} =~ $RE_ID ]] || die 2 "the CMS image id must be sha256: and 64 lower-case hex characters"
+  [[ ${words[2]} =~ $RE_ID ]] || die 2 "the web image id must be sha256: and 64 lower-case hex characters"
+  sha=${words[0]}
+  cms_id=${words[1]}
+  web_id=${words[2]}
 
   # --- the size limit: the same file apply-release.sh reads
   conf=$SCRIPT_DIR/limits.conf
