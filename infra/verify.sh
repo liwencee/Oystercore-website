@@ -468,7 +468,9 @@ check_dep_01() {
       if [[ -z $bound ]]; then
         if [[ $line == "command=\"$OC_DEPLOY_FORCED\",restrict "* ]]; then
           bad+=" [a key line does not bind an environment: its forced command is '$OC_DEPLOY_FORCED' alone, so that key could deploy any environment]"
-        elif [[ $line =~ ^command=\"$OC_DEPLOY_FORCED\ (prod|staging)\"(,[^\ ]*)?\  ]]; then
+        elif [[ $line =~ ^command=\"$OC_DEPLOY_FORCED\ (prod|staging)\"(,[^\ ]+)\  ]]; then
+          # (an option list that is not exactly ",restrict": a line with no options at all, restrict
+          # missing, falls through to the general message below)
           bad+=" [a key line carries options besides command= and restrict: '${BASH_REMATCH[2]#,}']"
         else
           bad+=" [a key line must start with exactly 'command=\"$OC_DEPLOY_FORCED <environment>\",restrict ' (the forced command with its environment and restrict, no other option, no pty); this one starts with '${line:0:100}']"
