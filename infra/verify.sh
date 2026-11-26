@@ -397,7 +397,7 @@ dep_expected_sudo_command() {
 }
 
 check_dep_01() {
-  local bad="" f st n line key rest a out entries cmds expect_cmd opts got kf
+  local bad="" f st n line key rest a out entries cmds expect_cmd got kf nenv bound e o mixed want seen_blobs
   if [[ $OC_DEPLOY_ENABLED != yes ]]; then
     for f in "$OC_DEPLOY_SUDOERS" "$OC_DEPLOY_KEYS" "$OC_DEPLOY_FORCED" "$OC_DEPLOY_APPLY"; do
       if [[ -e $f || -L $f ]]; then bad+=" [$f is still there]"; fi
@@ -440,47 +440,99 @@ check_dep_01() {
   grep -qx "MAX_TARBALL_BYTES=$OC_DEPLOY_MAX_BYTES" -- "$OC_DEPLOY_LIMITS" 2>/dev/null || bad+=" [$OC_DEPLOY_LIMITS does not say MAX_TARBALL_BYTES=$OC_DEPLOY_MAX_BYTES]"
   dep_root_only "$OC_DEPLOY_LIMITS" || bad+=" [$OC_DEPLOY_LIMITS is missing, or it or a folder above it can be changed by someone other than root]"
 
-  # 3. its key file: root's, one line, the forced command and restrict, nothing else
+  # 3. its key file: root's, exactly one line per environment on this server. Each line is that
+  # environment's forced command (which names the environment, so the key fixes it) and `restrict`,
+  # then that environment's own key, and nothing else. No line without an environment, none with
+  # any other option, no two with the same key, none with an environment this server does not run,
+  # and each key is the one configured for its environment (OC_DEPLOY_PUBKEY_<ENV>), not another's.
+  nenv=${#OC_ENV_LIST[@]}
+  declare -A key_count=() key_blob=()
+  seen_blobs=" "
   if [[ ! -f $OC_DEPLOY_KEYS || -L $OC_DEPLOY_KEYS ]]; then
     bad+=" [$OC_DEPLOY_KEYS is missing or not a plain file]"
   else
     [[ $(stat -c '%U:%G' -- "$OC_DEPLOY_KEYS") == root:root ]] || bad+=" [$OC_DEPLOY_KEYS is not owned by root]"
     dep_root_only "$OC_DEPLOY_KEYS" || bad+=" [$OC_DEPLOY_KEYS, or a folder above it, can be changed by someone other than root]"
     n=$(grep -c -v -E '^[[:space:]]*$' -- "$OC_DEPLOY_KEYS" || true)
-    if [[ $n -ne 1 ]]; then
-      bad+=" [$OC_DEPLOY_KEYS has $n lines, not exactly one key]"
-    else
-      line=$(grep -v -E '^[[:space:]]*$' -- "$OC_DEPLOY_KEYS")
-      # exactly: command="<forced command>",restrict <type> <base64> [oc-deploy-ci]
-      opts="command=\"$OC_DEPLOY_FORCED\",restrict"
-      if [[ $line != "$opts "* ]]; then
-        bad+=" [the key line must start with exactly '$opts ' (the forced command and restrict, no other option, no pty); it starts with '${line:0:100}']"
-      else
-        rest=${line#"$opts "}
-        if [[ ! $rest =~ ^(ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-nistp(256|384|521)|ssh-rsa)\ [A-Za-z0-9+/=]+(\ oc-deploy-ci)?$ ]]; then
-          bad+=" [after the options the key line is not '<key type> <key>' as the bootstrap writes it]"
-        else
-          # ssh-keygen wants a real file, not a pipe
-          kf=$(mktemp) || kf=""
-          if [[ -z $kf ]]; then
-            bad+=" [cannot make a temporary file to parse the key]"
-          else
-            printf '%s\n' "$rest" >"$kf"
-            ssh-keygen -l -f "$kf" >/dev/null 2>&1 || bad+=" [the key in $OC_DEPLOY_KEYS does not parse]"
-            rm -f -- "$kf"
-          fi
+    [[ $n -eq $nenv ]] || bad+=" [$OC_DEPLOY_KEYS has $n lines, not exactly one per environment ($nenv: ${OC_ENV_LIST[*]})]"
+    while IFS= read -r line || [[ -n $line ]]; do
+      [[ $line =~ ^[[:space:]]*$ ]] && continue
+      bound=""
+      for e in $OC_KNOWN_ENVS; do
+        if [[ $line == "$(users_deploy_prefix "$e") "* ]]; then
+          bound=$e
+          rest=${line#"$(users_deploy_prefix "$e") "}
+          break
         fi
-        # the CI key must not also be an admin's key
-        key=$(awk '{print $1 " " $2}' <<<"$rest")
-        for a in "${OC_ADMIN_NAMES[@]}"; do
-          f=$(getent passwd "$a" | cut -d: -f6)/.ssh/authorized_keys
-          [[ -f $f ]] || continue
-          if awk '{print $1 " " $2}' "$f" | grep -qxF -- "$key"; then
-            bad+=" [the deploy key is also the key of the admin $a]"
-          fi
-        done
+      done
+      if [[ -z $bound ]]; then
+        if [[ $line == "command=\"$OC_DEPLOY_FORCED\",restrict "* ]]; then
+          bad+=" [a key line does not bind an environment: its forced command is '$OC_DEPLOY_FORCED' alone, so that key could deploy any environment]"
+        elif [[ $line =~ ^command=\"$OC_DEPLOY_FORCED\ (prod|staging)\"(,[^\ ]*)?\  ]]; then
+          bad+=" [a key line carries options besides command= and restrict: '${BASH_REMATCH[2]#,}']"
+        else
+          bad+=" [a key line must start with exactly 'command=\"$OC_DEPLOY_FORCED <environment>\",restrict ' (the forced command with its environment and restrict, no other option, no pty); this one starts with '${line:0:100}']"
+        fi
+        continue
       fi
-    fi
+      if [[ " ${OC_ENV_LIST[*]} " != *" $bound "* ]]; then
+        bad+=" [a key line binds the environment $bound, which this server does not run]"
+      fi
+      key_count[$bound]=$((${key_count[$bound]:-0} + 1))
+      if [[ ! $rest =~ ^(ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-nistp(256|384|521)|ssh-rsa)\ [A-Za-z0-9+/=]+\ oc-deploy-$bound$ ]]; then
+        bad+=" [after its options the $bound key line is not '<key type> <key> oc-deploy-$bound' as the bootstrap writes it]"
+        continue
+      fi
+      # ssh-keygen wants a real file, not a pipe
+      kf=$(mktemp) || kf=""
+      if [[ -z $kf ]]; then
+        bad+=" [cannot make a temporary file to parse the key]"
+      else
+        printf '%s\n' "$rest" >"$kf"
+        ssh-keygen -l -f "$kf" >/dev/null 2>&1 || bad+=" [the key of the $bound line does not parse]"
+        rm -f -- "$kf"
+      fi
+      key=$(awk '{print $1 " " $2}' <<<"$rest")
+      key_blob[$bound]=$key
+      if [[ $seen_blobs == *"|$key|"* ]]; then
+        bad+=" [two key lines carry the same key (the one of the $bound line): one shared key would be one door into both environments]"
+      fi
+      seen_blobs+="|$key|"
+      # the CI key must not also be an admin's key
+      for a in "${OC_ADMIN_NAMES[@]}"; do
+        f=$(getent passwd "$a" | cut -d: -f6)/.ssh/authorized_keys
+        [[ -f $f ]] || continue
+        if awk '{print $1 " " $2}' "$f" | grep -qxF -- "$key"; then
+          bad+=" [the key of the $bound line is also the key of the admin $a]"
+        fi
+      done
+    done <"$OC_DEPLOY_KEYS"
+    for e in "${OC_ENV_LIST[@]}"; do
+      if [[ ${key_count[$e]:-0} -eq 0 ]]; then
+        bad+=" [no key line for the environment $e]"
+        continue
+      elif [[ ${key_count[$e]} -gt 1 ]]; then
+        bad+=" [${key_count[$e]} key lines for the environment $e, not exactly one]"
+      fi
+      [[ -n ${key_blob[$e]:-} ]] || continue
+      kf=$(oc_deploy_keyfile "$e")
+      if [[ ! -r $kf ]]; then
+        bad+=" [cannot compare the $e key line with the key configured for $e: $kf is not readable]"
+        continue
+      fi
+      want=$(users_pubkey_blob "$kf")
+      if [[ ${key_blob[$e]} != "$want" ]]; then
+        mixed=""
+        for o in "${OC_ENV_LIST[@]}"; do
+          [[ $o != "$e" && ${key_blob[$e]} == "$(users_pubkey_blob "$(oc_deploy_keyfile "$o")" 2>/dev/null)" ]] && mixed=$o
+        done
+        if [[ -n $mixed ]]; then
+          bad+=" [the key configured for $mixed is bound to $e in $OC_DEPLOY_KEYS (a $mixed key must only deploy $mixed)]"
+        else
+          bad+=" [the key line for $e carries a key that is not the one configured for $e (OC_DEPLOY_PUBKEY_${e^^})]"
+        fi
+      fi
+    done
   fi
 
   # 4. sudo: exactly one rule, for exactly one command and argument shape, nothing else
@@ -509,12 +561,13 @@ check_dep_01() {
     [[ $(stat -c '%U:%G %a' -- "$OC_DEPLOY_SUDOERS" 2>/dev/null) == "root:root 440" ]] || bad+=" [$OC_DEPLOY_SUDOERS is not root:root 440]"
   fi
 
-  # 5. sshd, asked for this user: the forced command, no terminal, no forwarding of any kind
+  # 5. sshd, asked for this user: no ForceCommand of its own (it would override the key lines'
+  # command=, which fixes each key's environment), no terminal, no forwarding of any kind
   if [[ -z ${SSHD_T_USER[$OC_DEPLOY_USER]:-} ]]; then
     bad+=" [sshd gave no answer for the user $OC_DEPLOY_USER]"
   else
     declare -A want_ssh=(
-      [authorizedkeysfile]=$OC_DEPLOY_KEYS [forcecommand]=$OC_DEPLOY_FORCED [permittty]=no [disableforwarding]=yes
+      [authorizedkeysfile]=$OC_DEPLOY_KEYS [forcecommand]=none [permittty]=no [disableforwarding]=yes
       [allowtcpforwarding]=no [allowstreamlocalforwarding]=no [x11forwarding]=no [allowagentforwarding]=no
       [permittunnel]=no [gatewayports]=no [permituserrc]=no [permituserenvironment]=no
       [passwordauthentication]=no [authenticationmethods]=publickey [maxsessions]=1
@@ -528,7 +581,7 @@ check_dep_01() {
   if [[ -n $bad ]]; then
     fail "the deploy account is not restricted as it should be:$bad"
   else
-    pass "the deploy account ($OC_DEPLOY_USER): no password, no group but its own; one key line (command=$OC_DEPLOY_FORCED,restrict); sshd gives it no terminal, forwarding or agent; sudo lets it run one script with one argument shape; what it runs is root's"
+    pass "the deploy account ($OC_DEPLOY_USER): no password, no group but its own; one key line per environment (${OC_ENV_LIST[*]}), each command=\"$OC_DEPLOY_FORCED <env>\",restrict with its own key; sshd gives it no terminal, forwarding or agent; sudo lets it run one script with one argument shape; what it runs is root's"
   fi
 }
 
