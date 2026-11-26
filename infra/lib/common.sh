@@ -259,9 +259,11 @@ OC_ENVS="prod staging"
 OC_SUDO_PASSWORDLESS="yes"
 OC_SWAP_SIZE="2G"
 OC_DEPLOY_ENABLED="yes"
-OC_DEPLOY_PUBKEY=""
+OC_DEPLOY_PUBKEY_PROD=""
+OC_DEPLOY_PUBKEY_STAGING=""
 OC_DEPLOY_MAX_BYTES="2147483648"
-OC_DEPLOY_KEYFILE=""
+OC_DEPLOY_KEYFILE_PROD=""
+OC_DEPLOY_KEYFILE_STAGING=""
 OC_CONFIG_DIR=""
 OC_ENV_LIST=()
 OC_ADMIN_NAMES=()
@@ -288,15 +290,23 @@ oc_load_config() {
         val=${BASH_REMATCH[1]}
       fi
       case $key in
-        OC_DOMAIN | OC_ADMINS | OC_SSH_PORT | OC_TIMEZONE | OC_ENVS | OC_SUDO_PASSWORDLESS | OC_SWAP_SIZE | OC_DEPLOY_ENABLED | OC_DEPLOY_PUBKEY | OC_DEPLOY_MAX_BYTES)
+        OC_DOMAIN | OC_ADMINS | OC_SSH_PORT | OC_TIMEZONE | OC_ENVS | OC_SUDO_PASSWORDLESS | OC_SWAP_SIZE | OC_DEPLOY_ENABLED | OC_DEPLOY_PUBKEY_PROD | OC_DEPLOY_PUBKEY_STAGING | OC_DEPLOY_MAX_BYTES)
           printf -v "$key" '%s' "$val"
           ;;
+        OC_DEPLOY_PUBKEY) oc_die "$file line $n: OC_DEPLOY_PUBKEY is gone: every environment has its own deploy key now. Use OC_DEPLOY_PUBKEY_PROD and OC_DEPLOY_PUBKEY_STAGING (one .pub file each, for each environment in OC_ENVS)" ;;
         *) oc_die "$file line $n: unknown setting $key" ;;
       esac
     else
       oc_die "$file line $n: expected KEY=value (no spaces around =, no trailing comments)"
     fi
   done <"$file"
+}
+
+# oc_deploy_keyfile ENV: the path of the public key file of that environment's deploy key (empty
+# when the deploy account is off or the environment is not on this server).
+oc_deploy_keyfile() {
+  local v=OC_DEPLOY_KEYFILE_${1^^}
+  printf '%s' "${!v:-}"
 }
 
 # Names an admin may not take: they belong to the system or to this setup.
@@ -333,16 +343,6 @@ oc_validate_config() {
     oc_die "OC_DEPLOY_MAX_BYTES must be a number of bytes between 1048576 (1 MiB) and 68719476736 (64 GiB)"
   ((OC_DEPLOY_MAX_BYTES >= 1048576 && OC_DEPLOY_MAX_BYTES <= 68719476736)) ||
     oc_die "OC_DEPLOY_MAX_BYTES must be a number of bytes between 1048576 (1 MiB) and 68719476736 (64 GiB)"
-  OC_DEPLOY_KEYFILE=""
-  if [[ $OC_DEPLOY_ENABLED == yes ]]; then
-    [[ -n $OC_DEPLOY_PUBKEY ]] ||
-      oc_die "OC_DEPLOY_ENABLED=yes needs OC_DEPLOY_PUBKEY=<path to the deploy public key (.pub)>. Create a key pair for CI (ssh-keygen -t ed25519), keep the private half in GitHub's secret DEPLOY_SSH_KEY, and give the .pub file here. Or set OC_DEPLOY_ENABLED=no."
-    OC_DEPLOY_KEYFILE=$OC_DEPLOY_PUBKEY
-    if [[ $OC_DEPLOY_KEYFILE != /* ]]; then
-      OC_DEPLOY_KEYFILE="$OC_CONFIG_DIR/$OC_DEPLOY_KEYFILE"
-    fi
-  fi
-
   read -r -a OC_ENV_LIST <<<"${OC_ENVS//,/ }"
   [[ ${#OC_ENV_LIST[@]} -gt 0 ]] || oc_die "OC_ENVS is empty"
   for env in "${OC_ENV_LIST[@]}"; do
@@ -350,6 +350,30 @@ oc_validate_config() {
     [[ $seen != *" $env "* ]] || oc_die "OC_ENVS: '$env' is listed twice"
     seen+="$env "
   done
+
+  # One deploy key PER ENVIRONMENT, for each environment this server runs (OC_ENVS). The key's line
+  # in the account's authorized_keys fixes its environment, so a staging key can never deploy
+  # production. A key setting for an environment that is not on this server is a mistake.
+  OC_DEPLOY_KEYFILE_PROD=""
+  OC_DEPLOY_KEYFILE_STAGING=""
+  if [[ $OC_DEPLOY_ENABLED == yes ]]; then
+    local pubvar filevar
+    for env in $OC_KNOWN_ENVS; do
+      pubvar=OC_DEPLOY_PUBKEY_${env^^}
+      filevar=OC_DEPLOY_KEYFILE_${env^^}
+      if [[ " ${OC_ENV_LIST[*]} " == *" $env "* ]]; then
+        [[ -n ${!pubvar} ]] ||
+          oc_die "OC_DEPLOY_ENABLED=yes needs $pubvar=<path to the PUBLIC key (.pub) of the $env deploy key>, because $env is in OC_ENVS. Every environment has its own key pair for CI (ssh-keygen -t ed25519): keep the private half in the GitHub environment '$env' as the secret DEPLOY_SSH_KEY and give the .pub file here. Or set OC_DEPLOY_ENABLED=no."
+        if [[ ${!pubvar} == /* ]]; then
+          printf -v "$filevar" '%s' "${!pubvar}"
+        else
+          printf -v "$filevar" '%s' "$OC_CONFIG_DIR/${!pubvar}"
+        fi
+      elif [[ -n ${!pubvar} ]]; then
+        oc_die "$pubvar is set, but $env is not in OC_ENVS (this server does not run it). Remove the setting."
+      fi
+    done
+  fi
 
   OC_ADMIN_NAMES=()
   OC_ADMIN_KEYS=()

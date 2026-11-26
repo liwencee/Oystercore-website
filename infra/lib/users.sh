@@ -284,24 +284,51 @@ EOF
 # users_pubkey_blob FILE: "type base64" of the first key line in FILE, without any comment.
 users_pubkey_blob() { awk '!/^[[:space:]]*(#|$)/ {print $1 " " $2; exit}' "$1"; }
 
-# users_validate_deploy_key: a plain public key (never private), and not an admin's key. If
-# the CI key were also an admin's key, whoever holds CI's secret could sign in as that admin.
+# users_validate_deploy_key: one plain public key (never private) for each environment on this
+# server; no key is an admin's key (if the CI key were also an admin's key, whoever holds CI's secret
+# could sign in as that admin), and no two environments share a key (a shared key would be one door
+# into both: the environment is fixed by the key, so each environment needs its own).
 users_validate_deploy_key() {
-  local blob adm i
+  local env file blob adm i other oblob setting
   [[ $OC_DEPLOY_ENABLED == yes ]] || return 0
-  oc_validate_pubkey "$OC_DEPLOY_KEYFILE"
-  blob=$(users_pubkey_blob "$OC_DEPLOY_KEYFILE")
-  for i in "${!OC_ADMIN_KEYS[@]}"; do
-    adm=$(users_pubkey_blob "${OC_ADMIN_KEYS[$i]}")
-    [[ $blob != "$adm" ]] || oc_die "OC_DEPLOY_PUBKEY is the same key as the admin '${OC_ADMIN_NAMES[$i]}'. The deploy key must be its own key pair, kept only in GitHub's secrets."
+  for env in "${OC_ENV_LIST[@]}"; do
+    oc_validate_pubkey "$(oc_deploy_keyfile "$env")"
+  done
+  for env in "${OC_ENV_LIST[@]}"; do
+    file=$(oc_deploy_keyfile "$env")
+    setting=OC_DEPLOY_PUBKEY_${env^^}
+    blob=$(users_pubkey_blob "$file")
+    for i in "${!OC_ADMIN_KEYS[@]}"; do
+      adm=$(users_pubkey_blob "${OC_ADMIN_KEYS[$i]}")
+      [[ $blob != "$adm" ]] || oc_die "$setting is the same key as the admin '${OC_ADMIN_NAMES[$i]}'. The deploy key must be its own key pair, kept only in the GitHub environment's secrets."
+    done
+    for other in "${OC_ENV_LIST[@]}"; do
+      [[ $other != "$env" ]] || continue
+      oblob=$(users_pubkey_blob "$(oc_deploy_keyfile "$other")")
+      [[ $blob != "$oblob" ]] || oc_die "$setting is the same key as OC_DEPLOY_PUBKEY_${other^^}. Each environment needs its own deploy key: the environment is fixed by the key, so one shared key would be one door into both."
+    done
   done
 }
 
-# users_deploy_key_line: the one line of the deploy account's authorized_keys file. The forced
-# command and `restrict` (no pty, no forwarding, no agent, no X11, no user rc) come first;
-# the key is the configured one, with a fixed comment instead of whatever the file had.
+# users_deploy_prefix ENV: the options and forced command that start ENV's key line. The command
+# carries the environment, so the key fixes it (deploy-release gets it as its one argument and
+# nothing a client sends can change it). `restrict` is no pty, no forwarding, no agent, no X11, no
+# user rc. Nothing else may be there: no from=, no other option.
+users_deploy_prefix() { printf 'command="%s %s",restrict' "$OC_DEPLOY_FORCED" "$1"; }
+
+# users_deploy_key_line ENV: the line of the deploy account's authorized_keys file for that
+# environment: the prefix, the configured key, and a fixed comment instead of the file's own.
 users_deploy_key_line() {
-  printf 'command="%s",restrict %s oc-deploy-ci' "$OC_DEPLOY_FORCED" "$(users_pubkey_blob "$OC_DEPLOY_KEYFILE")"
+  printf '%s %s oc-deploy-%s' "$(users_deploy_prefix "$1")" "$(users_pubkey_blob "$(oc_deploy_keyfile "$1")")" "$1"
+}
+
+# users_deploy_key_lines: the whole file, one line per environment on this server, in OC_ENVS order.
+users_deploy_key_lines() {
+  local env
+  for env in "${OC_ENV_LIST[@]}"; do
+    users_deploy_key_line "$env"
+    printf '\n'
+  done
 }
 
 # The one sudoers rule. The arguments are a regular expression (sudo 1.9.10 and later: the
@@ -367,8 +394,9 @@ users_ensure_deploy() {
 # Managed by infra/bootstrap.sh (OC_DEPLOY_MAX_BYTES in server.env). Read by both deploy scripts.
 MAX_TARBALL_BYTES=$OC_DEPLOY_MAX_BYTES
 EOF
-  # The deploy key, in a root-owned file that only sshd's Match block for this user reads.
-  oc_install_stdin "$OC_DEPLOY_KEYS" 0644 root root <<<"$(users_deploy_key_line)"
+  # The deploy keys, one line each (the environment is in the line), in a root-owned file that only
+  # sshd's Match block for this user reads.
+  users_deploy_key_lines | oc_install_stdin "$OC_DEPLOY_KEYS" 0644 root root
   # The one sudoers rule, checked by visudo before it is put in place.
   users_deploy_sudoers | oc_install_stdin "$OC_DEPLOY_SUDOERS" 0440 root root visudo -c -f
 }

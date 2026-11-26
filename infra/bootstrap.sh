@@ -72,10 +72,23 @@ print_next_steps() {
   printf '[oc]    on every start) until the first deploy loads the real images and points them at the new\n'
   printf '[oc]    tag. That is expected. Their files are in /home/oc-<env>/.config/containers/systemd/.\n'
   if [[ $OC_DEPLOY_ENABLED == yes ]]; then
-    printf '[oc] -  Deploys: the account %s may only run the forced command %s.\n' "$OC_DEPLOY_USER" "$OC_DEPLOY_FORCED"
-    printf '[oc]    Put these in GitHub (Settings, Secrets): DEPLOY_SSH_KEY (the PRIVATE half of the key whose\n'
-    printf '[oc]    public half is %s), DEPLOY_HOST, DEPLOY_SSH_PORT (%s) and DEPLOY_KNOWN_HOSTS (the output of\n' "$OC_DEPLOY_PUBKEY" "$OC_SSH_PORT"
-    printf '[oc]    ssh-keyscan -p %s <server address>, checked against the host key fingerprint you trust).\n' "$OC_SSH_PORT"
+    local denv gh_env
+    printf '[oc] -  Deploys. The account %s has ONE DEPLOY KEY PER ENVIRONMENT, and each key'"'"'s line fixes its\n' "$OC_DEPLOY_USER"
+    printf '[oc]    environment (its forced command is "%s <environment>"), so a staging key can never\n' "$OC_DEPLOY_FORCED"
+    printf '[oc]    deploy production. In GitHub (Settings, Environments) make an environment for each one on\n'
+    printf '[oc]    this server and put its secrets THERE, as ENVIRONMENT secrets, never as repository secrets\n'
+    printf '[oc]    (a repository secret can be read by a workflow on any branch):\n'
+    for denv in "${OC_ENV_LIST[@]}"; do
+      gh_env=$denv
+      [[ $denv != prod ]] || gh_env=production
+      printf '[oc]      environment "%s": DEPLOY_SSH_KEY (the PRIVATE half of the key whose public half is\n' "$gh_env"
+      printf '[oc]        %s), DEPLOY_HOST, DEPLOY_SSH_PORT (%s) and\n' "$(oc_deploy_keyfile "$denv")" "$OC_SSH_PORT"
+      printf '[oc]        DEPLOY_KNOWN_HOSTS (ssh-keyscan -p %s <server address>, checked against the host key you trust)\n' "$OC_SSH_PORT"
+    done
+    printf '[oc]    Then, on each environment, set "Deployment branches": production only the main branch,\n'
+    printf '[oc]    staging only the staging branch. Add "Required reviewers" (the manual approval) to production.\n'
+    printf '[oc]    Staging is a real door too: its key deploys images that run with the staging secrets, so\n'
+    printf '[oc]    protect the staging branch as strictly as main (the same branch protection and review).\n'
   fi
   for step in "${OC_NEXT_STEPS[@]}"; do
     printf '[oc] -  %s\n' "$step"

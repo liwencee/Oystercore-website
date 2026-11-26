@@ -22,9 +22,10 @@ ssh_allowed_users() {
 }
 
 # ssh_deploy_match: the rules that apply to the deploy account only. It signs in with a key
-# from a root-owned file, and sshd runs only the forced command for it, with no terminal, no
-# forwarding of any kind, no agent, no X11, no tunnel and no user rc file. (The key's own line
-# in that file says the same again: command= and restrict.)
+# from a root-owned file; each key's line there carries its own forced command (which names the
+# environment: one key per environment) and `restrict`. There is deliberately NO ForceCommand
+# here: sshd would let it override the key's command=, and with it the environment the key fixes.
+# Here: no terminal, no forwarding of any kind, no agent, no X11, no tunnel and no user rc file.
 ssh_deploy_match() {
   [[ ${OC_DEPLOY_ENABLED:-no} == yes ]] || return 0
   cat <<EOF
@@ -34,7 +35,6 @@ ssh_deploy_match() {
 Match User $OC_DEPLOY_USER
     AuthorizedKeysFile $OC_DEPLOY_KEYS
     AuthenticationMethods publickey
-    ForceCommand $OC_DEPLOY_FORCED
     PermitTTY no
     DisableForwarding yes
     X11Forwarding no
@@ -159,11 +159,12 @@ ssh_assert_effective() {
     [x11forwarding]=no
     [allowagentforwarding]=no
   )
-  # What the deploy account gets on top (its Match block): a root-owned key file, the forced
-  # command, and no terminal, forwarding, tunnel or user rc.
+  # What the deploy account gets on top (its Match block): a root-owned key file, no ForceCommand
+  # (the key lines' own command= must stay in charge: it fixes each key's environment), and no
+  # terminal, forwarding, tunnel or user rc.
   declare -A deploy_expect=(
     [authorizedkeysfile]=$OC_DEPLOY_KEYS
-    [forcecommand]=$OC_DEPLOY_FORCED
+    [forcecommand]=none
     [permittty]=no
     [disableforwarding]=yes
     [allowtcpforwarding]=no
