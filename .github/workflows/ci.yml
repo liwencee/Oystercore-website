@@ -180,3 +180,20 @@ jobs:
               --exit-code 1
             echo "::endgroup::"
           done
+
+  # The workflows themselves, checked before they ever run (actionlint, which also runs shellcheck
+  # on every `run:` script). It covers ci.yml and deploy.yml; deploy.yml is the one that holds
+  # the deploy key, so a typo in it is checked here and not discovered at a deploy. Like the other
+  # tools it runs as a container pinned by digest, so the only action here is checkout.
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ACTIONLINT: rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # v1.7.12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Lint the workflows (actionlint)
+        run: >-
+          docker run --rm --volume "$PWD:/repo:ro" --workdir /repo "$ACTIONLINT"
+          -color .github/workflows/ci.yml .github/workflows/deploy.yml
