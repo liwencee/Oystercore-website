@@ -44,7 +44,6 @@ Match User $OC_DEPLOY_USER
     PermitTunnel no
     GatewayPorts no
     PermitUserRC no
-    PermitUserEnvironment no
     MaxSessions 1
 EOF
 }

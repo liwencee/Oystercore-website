@@ -716,7 +716,7 @@ fmutation DEP-01 "sshd's Match block reads the key from the user's own home agai
 mutation DEP-01 "sshd's Match block for the deploy user is gone" "cp -p $ddrop $dbak/drop && sed -i '/^Match User oc-deploy\$/,\$d' $ddrop" "cp -p $dbak/drop $ddrop" "permittty is 'yes'"
 # --- SSH-01, SSH-02, SSH-03: asked for each user who may sign in
 fmutation SSH-01 "the deploy user's Match block switches passwords on (only the per-user answer shows it)" "$ddrop" 's/^    AuthenticationMethods publickey$/    PasswordAuthentication yes/' "oc-deploy(passwordauthentication=yes"
-fmutation SSH-02 "the deploy user's Match block allows root login (only the per-user answer shows it)" "$ddrop" 's/^    PermitUserEnvironment no$/    PermitRootLogin yes/' "oc-deploy(permitrootlogin=yes)"
+fmutation SSH-02 "the deploy user's Match block allows root login (only the per-user answer shows it)" "$ddrop" 's/^    MaxSessions 1$/    PermitRootLogin yes/' "oc-deploy(permitrootlogin=yes)"
 mutation SSH-01 "a Match block for another address (not the one asked about) switches passwords on" \
   "printf 'Match Address 198.51.100.0/24\n    PasswordAuthentication yes\n' >/etc/ssh/sshd_config.d/10-zz.conf" "rm -f /etc/ssh/sshd_config.d/10-zz.conf" "a Match or Include line this setup did not write"
 mutation SSH-02 "a Match block for another address allows root login" \
