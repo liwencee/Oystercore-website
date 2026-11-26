@@ -1095,7 +1095,7 @@ assert_with_fake_sshd() { # SED-EXPRESSION applied to the deploy user's answer
     source "$1/lib/common.sh"; source "$1/lib/ssh.sh"
     oc_load_config "$OC_CONFIG"; oc_validate_config
     expr=$2
-    sshd() { # the real sshd, except that the deploy user's answer is edited
+    sshd() { # the real sshd, except that the answer for the deploy account is edited
       if [[ $* == *"user=oc-deploy"* ]]; then /usr/sbin/sshd "$@" | sed -E "$expr"; else /usr/sbin/sshd "$@"; fi
     }
     ssh_assert_effective
