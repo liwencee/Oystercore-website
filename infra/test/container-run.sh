@@ -79,13 +79,14 @@ run_shellcheck() {
 make_settings() {
   mkdir -p "$work/keys"
   local u
-  for u in alice bob deploy; do
+  for u in alice bob deploy-prod deploy-staging; do
     [[ -f $work/keys/$u ]] || ssh-keygen -q -t ed25519 -N '' -C "$u@test" -f "$work/keys/$u"
   done
   cat >"$work/server.env" <<EOF
 OC_DOMAIN=example.test
 OC_ADMINS=alice:$work/keys/alice.pub,bob:$work/keys/bob.pub
-OC_DEPLOY_PUBKEY=$work/keys/deploy.pub
+OC_DEPLOY_PUBKEY_PROD=$work/keys/deploy-prod.pub
+OC_DEPLOY_PUBKEY_STAGING=$work/keys/deploy-staging.pub
 OC_SSH_PORT=2222
 OC_TIMEZONE=Africa/Lagos
 OC_ENVS=prod staging
@@ -129,7 +130,8 @@ section "refusals before anything is installed"
 bad_env() { printf '%s\n' "$1" >"$work/bad.env"; }
 base="OC_DOMAIN=example.test
 OC_ADMINS=alice:$work/keys/alice.pub
-OC_DEPLOY_PUBKEY=$work/keys/deploy.pub
+OC_DEPLOY_PUBKEY_PROD=$work/keys/deploy-prod.pub
+OC_DEPLOY_PUBKEY_STAGING=$work/keys/deploy-staging.pub
 OC_SSH_PORT=2222"
 bad_env "$base
 OC_SSH_PORT=22"
@@ -149,27 +151,61 @@ expect_fail "an admin named root is refused" bash "$infra/bootstrap.sh" --config
 expect_fail "a non-root user is refused" runuser -u nobody -- bash "$infra/bootstrap.sh" --config "$work/server.env"
 expect_fail "a missing settings file is refused" bash "$infra/bootstrap.sh" --config "$work/nope.env"
 
-# The deploy account's settings. Each refusal must be for its own reason: the base settings
-# above are valid, so only the one line changed can be the cause.
+# The deploy account's settings: one key per environment. Each refusal must be for its own reason:
+# the base settings above are valid, so only the lines changed can be the cause.
 bad_env "$base
-OC_DEPLOY_PUBKEY="
-expect_fail_because "the deploy account switched on with an empty key setting is refused" "OC_DEPLOY_ENABLED=yes needs OC_DEPLOY_PUBKEY" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+OC_DEPLOY_PUBKEY_PROD="
+expect_fail_because "the deploy account switched on with an empty key setting for prod is refused" "needs OC_DEPLOY_PUBKEY_PROD" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "OC_DOMAIN=example.test
+OC_ADMINS=alice:$work/keys/alice.pub
+OC_DEPLOY_PUBKEY_PROD=$work/keys/deploy-prod.pub
+OC_SSH_PORT=2222"
+expect_fail_because "a missing key for an enabled environment (staging) is refused" "needs OC_DEPLOY_PUBKEY_STAGING" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "OC_DOMAIN=example.test
+OC_ADMINS=alice:$work/keys/alice.pub
+OC_DEPLOY_PUBKEY_STAGING=$work/keys/deploy-staging.pub
+OC_SSH_PORT=2222"
+expect_fail_because "a missing key for an enabled environment (prod) is refused" "needs OC_DEPLOY_PUBKEY_PROD" bash "$infra/bootstrap.sh" --config "$work/bad.env"
 bad_env "OC_DOMAIN=example.test
 OC_ADMINS=alice:$work/keys/alice.pub
 OC_SSH_PORT=2222"
-expect_fail_because "the same, with OC_DEPLOY_ENABLED left at its default (yes)" "needs OC_DEPLOY_PUBKEY" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+expect_fail_because "no deploy keys at all, with OC_DEPLOY_ENABLED left at its default (yes)" "needs OC_DEPLOY_PUBKEY_PROD" bash "$infra/bootstrap.sh" --config "$work/bad.env"
 bad_env "$base
-OC_DEPLOY_PUBKEY=$work/keys/deploy"
-expect_fail_because "a PRIVATE key as the deploy key is refused" "contains a PRIVATE key" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+OC_DEPLOY_PUBKEY=$work/keys/deploy-prod.pub"
+expect_fail_because "the old single-key setting OC_DEPLOY_PUBKEY is refused, and says what replaces it" "OC_DEPLOY_PUBKEY is gone" bash "$infra/bootstrap.sh" --config "$work/bad.env"
 bad_env "$base
-OC_DEPLOY_PUBKEY=$work/keys/alice.pub"
-expect_fail_because "an admin's key as the deploy key is refused" "is the same key as the admin 'alice'" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+OC_DEPLOY_PUBKEY_STAGING=$work/keys/deploy-prod.pub"
+expect_fail_because "the same key for both environments is refused" "is the same key as OC_DEPLOY_PUBKEY_STAGING" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+cp "$work/keys/deploy-prod.pub" "$work/keys/deploy-prod-renamed.pub"
+sed -i 's/ [^ ]*$/ another-comment@elsewhere/' "$work/keys/deploy-prod-renamed.pub"
 bad_env "$base
-OC_DEPLOY_PUBKEY=$work/keys/nope.pub"
+OC_DEPLOY_PUBKEY_STAGING=$work/keys/deploy-prod-renamed.pub"
+expect_fail_because "the same key with another comment is still the same key (the blob is compared, not the comment)" "is the same key as OC_DEPLOY_PUBKEY_STAGING" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "OC_DOMAIN=example.test
+OC_ADMINS=alice:$work/keys/alice.pub
+OC_ENVS=prod
+OC_DEPLOY_PUBKEY_PROD=$work/keys/deploy-prod.pub
+OC_DEPLOY_PUBKEY_STAGING=$work/keys/deploy-staging.pub
+OC_SSH_PORT=2222"
+expect_fail_because "a key for an environment this server does not run (staging, with OC_ENVS=prod) is refused" "OC_DEPLOY_PUBKEY_STAGING is set, but staging is not in OC_ENVS" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "$base
+OC_DEPLOY_PUBKEY_PROD=$work/keys/deploy-prod"
+expect_fail_because "a PRIVATE key as the prod deploy key is refused" "contains a PRIVATE key" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "$base
+OC_DEPLOY_PUBKEY_STAGING=$work/keys/deploy-staging"
+expect_fail_because "a PRIVATE key as the staging deploy key is refused" "contains a PRIVATE key" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "$base
+OC_DEPLOY_PUBKEY_STAGING=$work/keys/alice.pub"
+expect_fail_because "an admin's key as the staging deploy key is refused" "is the same key as the admin 'alice'" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "$base
+OC_DEPLOY_PUBKEY_PROD=$work/keys/alice.pub"
+expect_fail_because "an admin's key as the prod deploy key is refused" "is the same key as the admin 'alice'" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+bad_env "$base
+OC_DEPLOY_PUBKEY_STAGING=$work/keys/nope.pub"
 expect_fail_because "a deploy key file that does not exist is refused" "public key file not found" bash "$infra/bootstrap.sh" --config "$work/bad.env"
-printf 'command="/bin/sh",pty %s\n' "$(cut -d' ' -f1,2 "$work/keys/deploy.pub")" >"$work/keys/deploy-with-options.pub"
+printf 'command="/bin/sh",pty %s\n' "$(cut -d' ' -f1,2 "$work/keys/deploy-staging.pub")" >"$work/keys/deploy-with-options.pub"
 bad_env "$base
-OC_DEPLOY_PUBKEY=$work/keys/deploy-with-options.pub"
+OC_DEPLOY_PUBKEY_STAGING=$work/keys/deploy-with-options.pub"
 expect_fail_because "a deploy key that carries options of its own is refused" "is not a plain public key line" bash "$infra/bootstrap.sh" --config "$work/bad.env"
 bad_env "$base
 OC_DEPLOY_ENABLED=maybe"
@@ -190,7 +226,13 @@ OC_ADMINS=alice:$work/keys/alice.pub
 OC_SSH_PORT=2222
 OC_DEPLOY_ENABLED=no"
 expect "OC_DEPLOY_ENABLED=no needs no deploy key (positive control)" validates "$work/bad.env"
-expect "the real settings validate (positive control)" validates "$work/server.env"
+bad_env "OC_DOMAIN=example.test
+OC_ADMINS=alice:$work/keys/alice.pub
+OC_ENVS=prod
+OC_DEPLOY_PUBKEY_PROD=$work/keys/deploy-prod.pub
+OC_SSH_PORT=2222"
+expect "a server that runs only prod needs only the prod key (positive control)" validates "$work/bad.env"
+expect "the real settings (both keys) validate (positive control)" validates "$work/server.env"
 
 # --------------------------------------------------------------------------------------
 snapshot() {
@@ -293,6 +335,12 @@ else
   grep 'changed:' "$work/bootstrap2.log" | head -n 20
 fi
 yes_if "the first run prints a NEXT STEPS notice about the placeholder certificate" grep -q 'REPLACE THE PLACEHOLDER TLS CERTIFICATE' "$work/bootstrap1.log"
+# The deploy instructions at the end of the first run say where the secrets go (the review finding:
+# "GitHub (Settings, Secrets)" reads as repository secrets, which every branch's workflows can read).
+for text in 'ONE DEPLOY KEY PER ENVIRONMENT' 'a staging key can never' 'ENVIRONMENT secrets, never as repository secrets'   'environment "production": DEPLOY_SSH_KEY' 'environment "staging": DEPLOY_SSH_KEY' "$work/keys/deploy-prod.pub" "$work/keys/deploy-staging.pub"   'DEPLOY_KNOWN_HOSTS' 'DEPLOY_HOST' 'DEPLOY_SSH_PORT' '"Deployment branches": production only the main branch'   'staging only the staging branch' '"Required reviewers" (the manual approval) to production' 'protect the staging branch as strictly as main'; do
+  yes_if "the first run's NEXT STEPS say: $text" grep -qF -- "$text" "$work/bootstrap1.log"
+done
+yes_if "the NEXT STEPS no longer say 'Settings, Secrets' (repository secrets)" bash -c "! grep -qF 'Settings, Secrets' '$work/bootstrap1.log'"
 yes_if "the second run still reminds about the placeholder certificate" grep -q 'REPLACE THE PLACEHOLDER TLS CERTIFICATE' "$work/bootstrap2.log"
 rc=0
 bash "$infra/verify.sh" >"$work/verify2.txt" 2>&1 || rc=$?
@@ -666,16 +714,55 @@ fmutation() {
   mutation "$id" "$desc" "cp -p $file $dbak/$(basename "$file") && sed -E -i '$expr' $file" "cp -p $dbak/$(basename "$file") $file && rm -f $dbak/$(basename "$file")" "$@"
 }
 
-# --- DEP-01: the key line
-mutation DEP-01 "a second key is added to the deploy account's key file" \
-  "cp -p $dkeys $dbak/keys && cat $work/keys/alice.pub >>$dkeys" "cp -p $dbak/keys $dkeys" "has 2 lines, not exactly one key"
-fmutation DEP-01 "the key line loses 'restrict'" "$dkeys" 's/,restrict//' "must start with exactly"
-fmutation DEP-01 "the key line gets the pty option" "$dkeys" 's/,restrict /,restrict,pty /' "must start with exactly"
-fmutation DEP-01 "the key line gets an agent-forwarding-friendly option set instead of restrict" "$dkeys" 's/,restrict /,no-pty /' "must start with exactly"
-fmutation DEP-01 "the key line's forced command is /bin/sh" "$dkeys" 's|^command="[^"]*"|command="/bin/sh"|' "must start with exactly"
-fmutation DEP-01 "the key line has no command= at all" "$dkeys" 's/^command="[^"]*",restrict //' "must start with exactly"
-mutation DEP-01 "the deploy key is replaced by an admin's key (alice)" \
-  "cp -p $dkeys $dbak/keys && printf 'command=\"$dforced\",restrict %s oc-deploy-ci\n' \"\$(cut -d' ' -f1,2 $work/keys/alice.pub)\" >$dkeys" "cp -p $dbak/keys $dkeys" "the deploy key is also the key of the admin alice"
+# --- DEP-01: the key lines (one per environment, each binding its environment and its own key)
+# The file holds two lines, prod's first. pkey and skey are the key types and keys of the two deploy
+# keys; kfile_set writes a whole file from two (command, key, comment) triples.
+pkey=$(awk '{print $1 " " $2}' "$work/keys/deploy-prod.pub")
+skey=$(awk '{print $1 " " $2}' "$work/keys/deploy-staging.pub")
+akey=$(awk '{print $1 " " $2}' "$work/keys/alice.pub")
+# kfile_mutation DESCRIPTION SHELL-COMMANDS-THAT-REWRITE-THE-KEY-FILE EXPECTED-TEXT...
+kfile_mutation() {
+  local desc=$1 apply=$2
+  shift 2
+  mutation DEP-01 "$desc" "cp -p $dkeys $dbak/keys && $apply" "cp -p $dbak/keys $dkeys" "$@"
+}
+yes_if "the key file has one line per environment, each binding its own environment (positive control)" bash -c "
+  [[ \$(wc -l <$dkeys) -eq 2 ]] &&
+  sed -n 1p $dkeys | grep -q '^command=\"$dforced prod\",restrict ssh-ed25519 ' &&
+  sed -n 2p $dkeys | grep -q '^command=\"$dforced staging\",restrict ssh-ed25519 ' &&
+  sed -n 1p $dkeys | grep -q ' oc-deploy-prod\$' && sed -n 2p $dkeys | grep -q ' oc-deploy-staging\$'"
+yes_if "the two lines carry different keys, and they are the configured ones (positive control)" bash -c "
+  [[ \$(sed -n 1p $dkeys | awk '{print \$3 \" \" \$4}') == '$pkey' && \$(sed -n 2p $dkeys | awk '{print \$3 \" \" \$4}') == '$skey' && '$pkey' != '$skey' ]]"
+kfile_mutation "an extra third key line (an admin's key, without options)" "cat $work/keys/alice.pub >>$dkeys" "has 3 lines, not exactly one per environment"
+kfile_mutation "an extra third key line (a copy of the prod line)" "sed -n 1p $dbak/keys >>$dkeys" "has 3 lines, not exactly one per environment"
+kfile_mutation "a missing key for an enabled environment (the staging line is gone)" "sed -i '/ oc-deploy-staging\$/d' $dkeys" "no key line for the environment staging"
+kfile_mutation "a missing key for an enabled environment (the prod line is gone)" "sed -i '/ oc-deploy-prod\$/d' $dkeys" "no key line for the environment prod"
+kfile_mutation "the same key for both environments (the staging line carries prod's key)" \
+  "printf 'command=\"$dforced prod\",restrict %s oc-deploy-prod\ncommand=\"$dforced staging\",restrict %s oc-deploy-staging\n' '$pkey' '$pkey' >$dkeys" "two key lines carry the same key"
+kfile_mutation "a key line with no environment in its command (prod's command is the bare forced command)" \
+  "sed -i 's|^command=\"$dforced prod\"|command=\"$dforced\"|' $dkeys" "does not bind an environment"
+kfile_mutation "a key line with no environment in its command (both lines)" \
+  "sed -i 's|^command=\"$dforced [a-z]*\"|command=\"$dforced\"|' $dkeys" "does not bind an environment"
+kfile_mutation "a line whose command names the wrong environment for its key (each key bound to the other environment)" \
+  "printf 'command=\"$dforced prod\",restrict %s oc-deploy-prod\ncommand=\"$dforced staging\",restrict %s oc-deploy-staging\n' '$skey' '$pkey' >$dkeys" "is bound to"
+kfile_mutation "a line whose command names an environment the comment and key do not match (only the command word is swapped)" \
+  "sed -i -e 's|deploy-release prod\"|deploy-release TMP\"|' -e 's|deploy-release staging\"|deploy-release prod\"|' -e 's|deploy-release TMP\"|deploy-release staging\"|' $dkeys" "key line is not '<key type> <key> oc-deploy-"
+kfile_mutation "a key line carrying the pty option beside command= and restrict" "sed -i 's/,restrict /,restrict,pty /' $dkeys" "carries options besides command= and restrict"
+kfile_mutation "a key line carrying no-agent-forwarding beside command= and restrict" "sed -i 's/,restrict /,restrict,no-agent-forwarding /' $dkeys" "carries options besides command= and restrict"
+kfile_mutation "a key line carrying from= beside command= and restrict" "sed -i 's/,restrict /,restrict,from=\"203.0.113.5\" /' $dkeys" "carries options besides command= and restrict"
+kfile_mutation "a key line carrying an option in front of command=" "sed -i 's/^command=/no-pty,command=/' $dkeys" "must start with exactly"
+kfile_mutation "the key line loses 'restrict'" "sed -i 's/,restrict//' $dkeys" "must start with exactly"
+kfile_mutation "the key line has no-pty instead of restrict" "sed -i 's/,restrict /,no-pty /' $dkeys" "carries options besides command= and restrict"
+kfile_mutation "the key line's forced command is /bin/sh" "sed -i 's|^command=\"[^\"]*\"|command=\"/bin/sh prod\"|' $dkeys" "must start with exactly"
+kfile_mutation "the key line has no command= at all" "sed -i 's/^command=\"[^\"]*\",restrict //' $dkeys" "must start with exactly"
+kfile_mutation "a key line's comment names another environment" "sed -i 's/ oc-deploy-prod\$/ oc-deploy-staging/' $dkeys" "key line is not '<key type> <key> oc-deploy-"
+kfile_mutation "the staging line carries an admin's key (alice)" \
+  "printf 'command=\"$dforced prod\",restrict %s oc-deploy-prod\ncommand=\"$dforced staging\",restrict %s oc-deploy-staging\n' '$pkey' '$akey' >$dkeys" "is also the key of the admin alice"
+mutation DEP-01 "the settings swap the two key files (each key is now configured for the other environment)" \
+  "cp -p $work/server.env $dbak/server.env && printf 'OC_DEPLOY_PUBKEY_PROD=$work/keys/deploy-staging.pub\nOC_DEPLOY_PUBKEY_STAGING=$work/keys/deploy-prod.pub\n' >>$work/server.env" \
+  "cp -p $dbak/server.env $work/server.env" "is bound to"
+mutation DEP-01 "a configured key file cannot be read (so the key line cannot be compared: a check that cannot run fails)" \
+  "mv $work/keys/deploy-staging.pub $dbak/deploy-staging.pub" "mv $dbak/deploy-staging.pub $work/keys/deploy-staging.pub" "is not readable"
 mutation DEP-01 "the key file is owned by the deploy user (it could rewrite its own forced command)" \
   "chown oc-deploy $dkeys" "chown root $dkeys" "is not owned by root"
 mutation DEP-01 "the key file is writable by everyone" "chmod 0666 $dkeys" "chmod 0644 $dkeys" "can be changed by someone other than root"
@@ -711,7 +798,8 @@ fmutation DEP-01 "sshd's Match block allows agent forwarding" "$ddrop" 's/^    A
 fmutation DEP-01 "sshd's Match block allows X11 forwarding" "$ddrop" 's/^    X11Forwarding no$/    X11Forwarding yes/' "x11forwarding is 'yes'"
 fmutation DEP-01 "sshd's Match block allows tunnels" "$ddrop" 's/^    PermitTunnel no$/    PermitTunnel yes/' "permittunnel is 'yes'"
 fmutation DEP-01 "sshd's Match block runs ~/.ssh/rc" "$ddrop" 's/^    PermitUserRC no$/    PermitUserRC yes/' "permituserrc is 'yes'"
-fmutation DEP-01 "sshd's Match block forces another command" "$ddrop" 's|^    ForceCommand .*|    ForceCommand /bin/sh|' "forcecommand is '/bin/sh'"
+mutation DEP-01 "sshd's Match block gets a ForceCommand of its own (it would override the key lines' command=, and with it the environment each key fixes)"   "cp -p $ddrop $dbak/drop && sed -i '/^Match User oc-deploy\$/a ForceCommand $dforced' $ddrop" "cp -p $dbak/drop $ddrop" "forcecommand is '$dforced'"
+mutation DEP-01 "sshd's Match block forces another command (/bin/sh)"   "cp -p $ddrop $dbak/drop && sed -i '/^Match User oc-deploy\$/a ForceCommand /bin/sh' $ddrop" "cp -p $dbak/drop $ddrop" "forcecommand is '/bin/sh'"
 fmutation DEP-01 "sshd's Match block reads the key from the user's own home again" "$ddrop" '/^    AuthorizedKeysFile /d' "authorizedkeysfile is '.ssh/authorized_keys"
 mutation DEP-01 "sshd's Match block for the deploy user is gone" "cp -p $ddrop $dbak/drop && sed -i '/^Match User oc-deploy\$/,\$d' $ddrop" "cp -p $dbak/drop $ddrop" "permittty is 'yes'"
 # --- SSH-01, SSH-02, SSH-03: asked for each user who may sign in
@@ -995,55 +1083,90 @@ else
 fi
 expect_fail "TCP forwarding is refused (ssh -R)" "${sshc[@]}" -i "$work/keys/alice" -o ExitOnForwardFailure=yes -R 15432:127.0.0.1:3306 alice@127.0.0.1 true
 
-# --- the deploy account over a real SSH connection ---------------------------------------------
-dkey=$work/keys/deploy
+# --- the deploy account over a real SSH connection: one key per environment ---------------------
+dkeyp=$work/keys/deploy-prod
+dkeyst=$work/keys/deploy-staging
 dsha=1111111111111111111111111111111111111111
 did=sha256:$(printf 'a%.0s' $(seq 64))
-dsshc=("${sshc[@]}" -o IdentitiesOnly=yes -i "$dkey")
-# dssh ARGS...: ssh as the deploy account with the deploy key, no input (a test that sends a file redirects it itself)
-dssh() { "${dsshc[@]}" oc-deploy@127.0.0.1 "$@" </dev/null; }
+dgood="$dsha $did $did" # what CI sends: no environment in it (the key fixes that)
+dsshp=("${sshc[@]}" -o IdentitiesOnly=yes -i "$dkeyp")
+dsshs=("${sshc[@]}" -o IdentitiesOnly=yes -i "$dkeyst")
+# dssh_prod ARGS... and dssh_staging ARGS...: ssh as the deploy account with that environment's key, no
+# input (a test that sends a file redirects it itself)
+# shellcheck disable=SC2317  # both are called through refused_over_ssh, by name
+dssh_prod() { "${dsshp[@]}" oc-deploy@127.0.0.1 "$@" </dev/null; }
+# shellcheck disable=SC2317
+dssh_staging() { "${dsshs[@]}" oc-deploy@127.0.0.1 "$@" </dev/null; }
+# refused_over_ssh DESCRIPTION KEY-ENV COMMAND: the forced command refuses (exit 2, "the command must be
+# exactly") and the root script is never reached (no "deploying" in the output)
+refused_over_ssh() {
+  local desc=$1 keyenv=$2 cmd=$3 rc=0 out
+  out=$("dssh_$keyenv" "$cmd" 2>&1) || rc=$?
+  if [[ $rc -eq 2 && $out == *"the command must be exactly"* && $out != *"deploying"* && $out != *"uid="* ]]; then
+    ok "$desc (exit 2, refused by the forced command, the root script never ran)"
+  else
+    notok "$desc: exit $rc: ${out:0:250}"
+  fi
+}
+refused_over_ssh "the prod key signs in, and asking for 'id' runs the forced command instead" prod "id"
+refused_over_ssh "the staging key signs in, and asking for 'id' runs the forced command instead" staging "id"
+refused_over_ssh "a 39-character commit over the prod key is refused" prod "${dsha:0:39} $did $did"
+# The review finding: one key must never reach both environments.
+refused_over_ssh "THE STAGING KEY CANNOT DEPLOY PRODUCTION: asking for 'prod <values>' with the staging key is refused" staging "prod $dgood"
+refused_over_ssh "the prod key cannot deploy staging: asking for 'staging <values>' with the prod key is refused" prod "staging $dgood"
+refused_over_ssh "a client that names its own environment is refused even when it is the key's (prod key, 'prod <values>')" prod "prod $dgood"
+refused_over_ssh "a client that names its own environment is refused even when it is the key's (staging key, 'staging <values>')" staging "staging $dgood"
+refused_over_ssh "two words instead of three are refused" prod "$dsha $did"
+refused_over_ssh "four words after the three are refused" prod "$dgood extra"
 rc=0
-out=$(dssh id 2>&1) || rc=$?
-if [[ $rc -eq 2 && $out == *"the command must be exactly"* && $out != *"uid="* ]]; then
-  ok "the deploy key signs in, and asking for 'id' runs the forced command instead (it refuses with exit 2; no uid= output)"
-else
-  notok "the deploy account answered 'id' unexpectedly (exit $rc): ${out:0:200}"
-fi
-rc=0
-out=$(dssh "prod ${dsha:0:39} $did $did" 2>&1) || rc=$?
-if [[ $rc -eq 2 && $out == *"the command must be exactly"* ]]; then ok "a 39-character commit over SSH is refused by the forced command (exit 2)"; else notok "39-character commit over SSH: exit $rc: ${out:0:200}"; fi
-rc=0
-out=$("${dsshc[@]}" -T oc-deploy@127.0.0.1 </dev/null 2>&1) || rc=$?
+out=$("${dsshp[@]}" -T oc-deploy@127.0.0.1 </dev/null 2>&1) || rc=$?
 if [[ $rc -eq 2 && $out == *"no command given"* ]]; then ok "signing in with no command (a login shell) runs the forced command, which refuses (exit 2)"; else notok "no command: exit $rc: ${out:0:200}"; fi
 rc=0
-out=$("${dsshc[@]}" -tt oc-deploy@127.0.0.1 id </dev/null 2>&1) || rc=$?
-if [[ $out == *"PTY allocation request failed"* && $out != *"uid="* ]]; then ok "a terminal (ssh -tt) is refused for the deploy account"; else notok "ssh -tt for the deploy account: exit $rc: ${out:0:200}"; fi
-expect_fail "TCP forwarding is refused for the deploy account (ssh -L)" "${dsshc[@]}" -o ExitOnForwardFailure=yes -L 15433:127.0.0.1:3306 oc-deploy@127.0.0.1 id
-expect_fail "scp to the deploy account is refused (the forced command is not scp)" scp -P 2222 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o IdentitiesOnly=yes -i "$dkey" /etc/hostname oc-deploy@127.0.0.1:/tmp/hostname-x
-expect_fail "sftp to the deploy account is refused (a subsystem is forced too)" bash -c "printf 'ls\n' | sftp -P 2222 -b - -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o IdentitiesOnly=yes -i '$dkey' oc-deploy@127.0.0.1"
+out=$("${dsshp[@]}" -tt oc-deploy@127.0.0.1 id </dev/null 2>&1) || rc=$?
+if [[ $out == *"PTY allocation request failed"* && $out != *"uid="* ]]; then ok "a terminal (ssh -tt) is refused for the prod key"; else notok "ssh -tt for the prod key: exit $rc: ${out:0:200}"; fi
+rc=0
+out=$("${dsshs[@]}" -tt oc-deploy@127.0.0.1 id </dev/null 2>&1) || rc=$?
+if [[ $out == *"PTY allocation request failed"* && $out != *"uid="* ]]; then ok "a terminal (ssh -tt) is refused for the staging key"; else notok "ssh -tt for the staging key: exit $rc: ${out:0:200}"; fi
+expect_fail "TCP forwarding is refused for the prod key (ssh -L)" "${dsshp[@]}" -o ExitOnForwardFailure=yes -L 15433:127.0.0.1:3306 oc-deploy@127.0.0.1 id
+expect_fail "TCP forwarding is refused for the staging key (ssh -L)" "${dsshs[@]}" -o ExitOnForwardFailure=yes -L 15434:127.0.0.1:3306 oc-deploy@127.0.0.1 id
+expect_fail "scp to the deploy account is refused (the forced command is not scp)" scp -P 2222 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o IdentitiesOnly=yes -i "$dkeyp" /etc/hostname oc-deploy@127.0.0.1:/tmp/hostname-x
+expect_fail "sftp to the deploy account is refused (a subsystem is forced too)" bash -c "printf 'ls\n' | sftp -P 2222 -b - -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o IdentitiesOnly=yes -i '$dkeyp' oc-deploy@127.0.0.1"
 expect_fail "an admin's key cannot sign in as the deploy account" "${sshc[@]}" -o IdentitiesOnly=yes -i "$work/keys/alice" oc-deploy@127.0.0.1 id
-expect_fail "the deploy key cannot sign in as an admin" "${sshc[@]}" -o IdentitiesOnly=yes -i "$dkey" alice@127.0.0.1 id
-expect_fail "the deploy key cannot sign in as root" "${sshc[@]}" -o IdentitiesOnly=yes -i "$dkey" root@127.0.0.1 id
+expect_fail "the prod deploy key cannot sign in as an admin" "${sshc[@]}" -o IdentitiesOnly=yes -i "$dkeyp" alice@127.0.0.1 id
+expect_fail "the staging deploy key cannot sign in as an admin" "${sshc[@]}" -o IdentitiesOnly=yes -i "$dkeyst" alice@127.0.0.1 id
+expect_fail "the prod deploy key cannot sign in as root" "${sshc[@]}" -o IdentitiesOnly=yes -i "$dkeyp" root@127.0.0.1 id
+expect_fail "the staging deploy key cannot sign in as root" "${sshc[@]}" -o IdentitiesOnly=yes -i "$dkeyst" root@127.0.0.1 id
 rc=0
 out=$("${sshc[@]}" -i "$work/keys/alice" -tt alice@127.0.0.1 tty </dev/null 2>&1) || rc=$?
 if [[ $out == *"/dev/pts/"* ]]; then ok "an admin still gets a terminal (the deploy account's Match block did not leak to admins)"; else notok "admin terminal: exit $rc: ${out:0:200}"; fi
 
-# The whole chain: SSH, forced command, spool, sudo, root script, Podman as the environment's user.
-# Podman cannot run inside this container, so the root script stops at its first Podman call; what is
-# proved here is everything before it, with the real sudo, runuser and file permissions.
-qsum_before=$(sha256sum "$qweb" "$qcms" | sha256sum)
+# The whole chain, once per key: SSH, forced command (which fixes the environment), spool, sudo, root
+# script, Podman as the environment's user. Podman cannot run inside this container, so the root script
+# stops at its first Podman call; what is proved is everything before it, with the real sudo, runuser and
+# file permissions, and WHICH environment each key reaches.
+qstg_web=/home/oc-staging/.config/containers/systemd/oc-web-staging.container
+qstg_cms=/home/oc-staging/.config/containers/systemd/oc-cms-staging.container
+qsum_before=$(sha256sum "$qweb" "$qcms" "$qstg_web" "$qstg_cms" | sha256sum)
 printf 'not an image' | gzip -c >"$work/e2e.tgz"
 rc=0
-out=$("${dsshc[@]}" oc-deploy@127.0.0.1 "prod $dsha $did $did" <"$work/e2e.tgz" 2>&1) || rc=$?
-if [[ $out == *"received"* && $out == *"deploying $dsha to prod"* ]]; then
-  ok "end to end: the forced command spooled the tarball and the root script ran through sudo (output: ${out//$'\n'/ | })"
+out=$("${dsshp[@]}" oc-deploy@127.0.0.1 "$dgood" <"$work/e2e.tgz" 2>&1) || rc=$?
+if [[ $out == *"received"* && $out == *"deploying $dsha to prod"* && $out != *"to staging"* ]]; then
+  ok "end to end, the prod key: the forced command spooled the tarball and the root script ran through sudo FOR PROD (output: ${out//$'\n'/ | })"
 else
-  notok "end to end: the chain did not reach the root script (exit $rc): ${out:0:300}"
+  notok "end to end, the prod key: the chain did not reach the root script for prod (exit $rc): ${out:0:300}"
 fi
-yes_if "end to end: it stopped after the checks, before changing anything (exit 1 or 6, not 2 or 5)" test "$rc" -eq 1 -o "$rc" -eq 6
-yes_if "end to end: the Quadlet files are unchanged" test "$(sha256sum "$qweb" "$qcms" | sha256sum)" = "$qsum_before"
-yes_if "end to end: the spool folder is empty again afterwards" bash -c "[[ -z \$(ls -A /var/lib/oc-deploy/spool | grep -v '^.lock\$') ]]"
-yes_if "end to end: sudo's own log records the one command, run as root, by the deploy user" bash -c "tr '\n' ' ' </var/log/sudo.log | tr -s ' ' | grep -q 'oc-deploy : .*USER=root ; COMMAND=/usr/local/lib/oc/deploy/apply-release.sh prod $dsha '"
+yes_if "end to end, the prod key: it stopped after the checks, before changing anything (exit 1 or 6, not 2 or 5)" test "$rc" -eq 1 -o "$rc" -eq 6
+rc=0
+out=$("${dsshs[@]}" oc-deploy@127.0.0.1 "$dgood" <"$work/e2e.tgz" 2>&1) || rc=$?
+if [[ $out == *"received"* && $out == *"deploying $dsha to staging"* && $out != *"to prod"* ]]; then
+  ok "end to end, the staging key: the same command reaches the root script FOR STAGING, never prod (output: ${out//$'\n'/ | })"
+else
+  notok "end to end, the staging key: the chain did not reach the root script for staging (exit $rc): ${out:0:300}"
+fi
+yes_if "end to end, the staging key: it stopped after the checks, before changing anything (exit 1 or 6, not 2 or 5)" test "$rc" -eq 1 -o "$rc" -eq 6
+yes_if "end to end: every environment's Quadlet files are unchanged" test "$(sha256sum "$qweb" "$qcms" "$qstg_web" "$qstg_cms" | sha256sum)" = "$qsum_before"
+yes_if "end to end: the spool folder is empty again afterwards" bash -c "[[ -z \$(find /var/lib/oc-deploy/spool -mindepth 1 ! -name .lock) ]]"
+yes_if "end to end: sudo's own log records the prod command and the staging command, each run as root by the deploy user" bash -c "tr '\n' ' ' </var/log/sudo.log | tr -s ' ' | grep -q 'oc-deploy : .*USER=root ; COMMAND=/usr/local/lib/oc/deploy/apply-release.sh prod $dsha ' && tr '\n' ' ' </var/log/sudo.log | tr -s ' ' | grep -q 'oc-deploy : .*USER=root ; COMMAND=/usr/local/lib/oc/deploy/apply-release.sh staging $dsha '"
 # sudo itself, called by the deploy user directly
 expect_fail_because "sudo refuses anything but the one script: a root shell" "a password is required" runuser -u oc-deploy -- sudo -n -i true
 expect_fail_because "sudo refuses the script with arguments of another shape (bad environment)" "a password is required" runuser -u oc-deploy -- sudo -n /usr/local/lib/oc/deploy/apply-release.sh dev "$dsha" "$did" "$did"
