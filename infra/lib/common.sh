@@ -32,6 +32,7 @@ OC_ENV_HOME_ROOT=/home
 OC_QUADLET_SUBDIR=.config/containers/systemd
 OC_MARIADB_RUN_DIR=/run/mysqld
 OC_MARIADB_SOCKET=/run/mysqld/mysqld.sock
+OC_MARIADB_DATADIR=/var/lib/mysql
 OC_CLAMD_RUN_DIR=/run/clamav
 OC_LINGER_DIR=/var/lib/systemd/linger
 OC_SUBID_MIN=100000
@@ -357,13 +358,16 @@ oc_validate_config() {
   OC_DEPLOY_KEYFILE_PROD=""
   OC_DEPLOY_KEYFILE_STAGING=""
   if [[ $OC_DEPLOY_ENABLED == yes ]]; then
-    local pubvar filevar
+    local pubvar filevar ghenv
     for env in $OC_KNOWN_ENVS; do
       pubvar=OC_DEPLOY_PUBKEY_${env^^}
       filevar=OC_DEPLOY_KEYFILE_${env^^}
+      # the GitHub environment that holds the private half: `production` for the server's prod
+      ghenv=$env
+      [[ $env != prod ]] || ghenv=production
       if [[ " ${OC_ENV_LIST[*]} " == *" $env "* ]]; then
         [[ -n ${!pubvar} ]] ||
-          oc_die "OC_DEPLOY_ENABLED=yes needs $pubvar=<path to the PUBLIC key (.pub) of the $env deploy key>, because $env is in OC_ENVS. Every environment has its own key pair for CI (ssh-keygen -t ed25519): keep the private half in the GitHub environment '$env' as the secret DEPLOY_SSH_KEY and give the .pub file here. Or set OC_DEPLOY_ENABLED=no."
+          oc_die "OC_DEPLOY_ENABLED=yes needs $pubvar=<path to the PUBLIC key (.pub) of the $env deploy key>, because $env is in OC_ENVS. Every environment has its own key pair for CI (ssh-keygen -t ed25519): keep the private half in the GitHub environment '$ghenv' as the secret DEPLOY_SSH_KEY and give the .pub file here. Or set OC_DEPLOY_ENABLED=no."
         if [[ ${!pubvar} == /* ]]; then
           printf -v "$filevar" '%s' "${!pubvar}"
         else

@@ -635,6 +635,9 @@ check_dep_01() {
       [allowtcpforwarding]=no [allowstreamlocalforwarding]=no [x11forwarding]=no [allowagentforwarding]=no
       [permittunnel]=no [gatewayports]=no [permituserrc]=no [permituserenvironment]=no
       [passwordauthentication]=no [authenticationmethods]=publickey [maxsessions]=1
+      # no other way in than the key lines (their command= is all that forces the command now): no
+      # program that prints keys, no certificate authority, no principals file
+      [authorizedkeyscommand]=none [authorizedkeyscommanduser]=none [trustedusercakeys]=none [authorizedprincipalsfile]=none
     )
     for key in "${!want_ssh[@]}"; do
       got=$(sshd_val_user "$OC_DEPLOY_USER" "$key")
@@ -653,7 +656,7 @@ check_dep_01() {
 # must not write. Two controls come first: if the account cannot be run as at all, or cannot do
 # what it is meant to do, every "cannot" below would pass for the wrong reason, so the check fails.
 check_dep_02() {
-  local bad="" env d f
+  local bad="" env d f readable u rc out
   local -a lookat=()
   if [[ $OC_DEPLOY_ENABLED != yes ]]; then
     if getent passwd "$OC_DEPLOY_USER" >/dev/null; then
@@ -678,12 +681,18 @@ check_dep_02() {
   fi
   as_deploy test -w "$OC_DEPLOY_SPOOL" || bad+=" [control: $OC_DEPLOY_USER cannot write its own spool folder $OC_DEPLOY_SPOOL]"
 
-  # not readable: the secrets folder (and every file in it) and every environment's data
-  if as_deploy ls -- "$OC_SECRET_DIR" >/dev/null 2>&1; then bad+=" [can list $OC_SECRET_DIR]"; fi
-  for f in "$OC_SECRET_DIR"/*; do
-    [[ -e $f ]] || continue
-    if as_deploy test -r "$f"; then bad+=" [can read $f]"; fi
-  done
+  # not readable: the secrets folder (and every file in it) and every environment's data. A folder that
+  # is not there cannot be tried: that is a failure, not a pass (a missing /etc/oc would otherwise
+  # look like a folder nobody can read).
+  if [[ ! -d $OC_SECRET_DIR ]]; then
+    bad+=" [$OC_SECRET_DIR does not exist, so it cannot be checked]"
+  else
+    if as_deploy ls -- "$OC_SECRET_DIR" >/dev/null 2>&1; then bad+=" [can list $OC_SECRET_DIR]"; fi
+    for f in "$OC_SECRET_DIR"/*; do
+      [[ -e $f ]] || continue
+      if as_deploy test -r "$f"; then bad+=" [can read $f]"; fi
+    done
+  fi
   for env in "${OC_ENV_LIST[@]}"; do
     lookat=("$OC_DATA_ROOT/$env" "$OC_DATA_ROOT/$env/media" "$OC_DATA_ROOT/$env/private" "$OC_DATA_ROOT/$env/tmp" "$(oc_env_home "$env")" "$(oc_env_quadlet_dir "$env")")
     for d in "${lookat[@]}"; do
@@ -695,6 +704,46 @@ check_dep_02() {
       if as_deploy test -x "$d"; then bad+=" [can enter $d]"; fi
     done
   done
+  # MariaDB: its files hold every database (password hashes included), and its socket is open to every
+  # local user, so the only thing between the deploy account and the data is that it has no login.
+  if [[ ! -d $OC_MARIADB_DATADIR ]]; then
+    bad+=" [$OC_MARIADB_DATADIR does not exist, so it cannot be checked]"
+  else
+    # (what the server itself owns: the data, logs and system tables. The package leaves a few
+    # root-owned notes there, such as mariadb_upgrade_info, which anyone may read.)
+    getent passwd mysql >/dev/null || bad+=" [the user mysql does not exist, so the MariaDB data folder cannot be checked]"
+    # shellcheck disable=SC2016  # the sh -c program is single-quoted on purpose
+    readable=$(find "$OC_MARIADB_DATADIR" -maxdepth 2 -mindepth 1 -user mysql -print0 2>/dev/null |
+      xargs -0 -r runuser -u "$OC_DEPLOY_USER" -- sh -c 'for p; do if test -r "$p"; then echo "$p"; fi; done' sh 2>/dev/null | head -n 3 | tr '\n' ' ')
+    [[ -z $readable ]] || bad+=" [can read in the MariaDB data folder: $readable]"
+  fi
+  if ! oc_have mariadb; then
+    bad+=" [the mariadb client is missing, so a sign-in to MariaDB through its socket cannot be tried]"
+  elif [[ ! -S $OC_MARIADB_SOCKET ]]; then
+    bad+=" [the MariaDB socket $OC_MARIADB_SOCKET does not exist (is MariaDB running?), so a sign-in cannot be tried]"
+  else
+    for u in root "$OC_DEPLOY_USER" "${OC_ENV_LIST[@]/#/oc_}"; do
+      rc=0
+      out=$(timeout 15 runuser -u "$OC_DEPLOY_USER" -- mariadb --no-defaults --protocol=socket --socket="$OC_MARIADB_SOCKET" -u "$u" -e 'SELECT 1' 2>&1) || rc=$?
+      if [[ $rc -eq 0 ]]; then
+        bad+=" [$OC_DEPLOY_USER can sign in to MariaDB through its socket as '$u']"
+      elif [[ $out != *"Access denied"* ]]; then
+        # refused for some other reason (no server answering, a broken client): that proves nothing
+        bad+=" [could not tell whether $OC_DEPLOY_USER can sign in to MariaDB as '$u': ${out:0:80}]"
+      fi
+    done
+  fi
+  # /var/log: it may not write there (it could plant or replace a log), and may not read the logs of
+  # who signed in and what sudo ran
+  if [[ ! -d /var/log ]]; then
+    bad+=" [/var/log does not exist, so it cannot be checked]"
+  else
+    if as_deploy test -w /var/log; then bad+=" [can write /var/log]"; fi
+    for f in /var/log/auth.log /var/log/syslog /var/log/sudo.log /var/log/audit; do
+      [[ -e $f ]] || continue
+      if as_deploy test -r "$f"; then bad+=" [can read $f]"; fi
+    done
+  fi
   # not writable: its own home, the configuration, what it runs, the sudo and sshd files
   for f in "$OC_DEPLOY_HOME" "$OC_SECRET_DIR" "$OC_DATA_ROOT" /etc /etc/sudoers.d /etc/ssh /etc/ssh/sshd_config.d "$OC_DEPLOY_DIR" "$OC_DEPLOY_FORCED" \
     "$OC_DEPLOY_APPLY" "$OC_DEPLOY_LIMITS" "$OC_DEPLOY_KEYS" "$OC_DEPLOY_SUDOERS" /usr/local/sbin /usr/local/bin; do
@@ -708,7 +757,7 @@ check_dep_02() {
   if [[ -n $bad ]]; then
     fail "the deploy user reaches what it must not:$bad"
   else
-    pass "the deploy user cannot read $OC_SECRET_DIR or any environment's data folder or home, cannot write anywhere but its spool folder, and cannot run any other command through sudo"
+    pass "the deploy user cannot read $OC_SECRET_DIR, any environment's data folder or home, MariaDB's data folder or the logs of sign-ins and sudo; cannot sign in to MariaDB; cannot write anywhere but its spool folder; and cannot run any other command through sudo"
   fi
 }
 

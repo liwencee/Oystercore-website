@@ -156,11 +156,13 @@ expect_fail "a missing settings file is refused" bash "$infra/bootstrap.sh" --co
 bad_env "$base
 OC_DEPLOY_PUBKEY_PROD="
 expect_fail_because "the deploy account switched on with an empty key setting for prod is refused" "needs OC_DEPLOY_PUBKEY_PROD" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+expect_fail_because "the missing prod key's message names the GitHub environment 'production' (the server's prod is GitHub's production)" "GitHub environment 'production'" bash "$infra/bootstrap.sh" --config "$work/bad.env"
 bad_env "OC_DOMAIN=example.test
 OC_ADMINS=alice:$work/keys/alice.pub
 OC_DEPLOY_PUBKEY_PROD=$work/keys/deploy-prod.pub
 OC_SSH_PORT=2222"
 expect_fail_because "a missing key for an enabled environment (staging) is refused" "needs OC_DEPLOY_PUBKEY_STAGING" bash "$infra/bootstrap.sh" --config "$work/bad.env"
+expect_fail_because "the missing staging key's message names the GitHub environment 'staging'" "GitHub environment 'staging'" bash "$infra/bootstrap.sh" --config "$work/bad.env"
 bad_env "OC_DOMAIN=example.test
 OC_ADMINS=alice:$work/keys/alice.pub
 OC_DEPLOY_PUBKEY_STAGING=$work/keys/deploy-staging.pub
@@ -826,6 +828,27 @@ mutation SSH-03 "the deploy account is switched off in server.env while its acco
 mutation DEP-01 "the deploy account is switched off in server.env while its account still exists" \
   "cp -p $work/server.env $dbak/server.env && printf 'OC_DEPLOY_ENABLED=no\n' >>$work/server.env" "cp -p $dbak/server.env $work/server.env" "the deploy account is switched off but is not gone"
 
+# --- DEP-01: with no ForceCommand in the Match block only the key lines' command= forces the command, so
+# every other way to sign in as the deploy user must be off, whichever file turns it on
+mutation DEP-01 "an earlier sshd drop-in sets a global AuthorizedKeysCommand (a program that prints keys, with no command=)" \
+  "printf 'AuthorizedKeysCommand /usr/local/bin/oc-keys\nAuthorizedKeysCommandUser root\n' >/etc/ssh/sshd_config.d/00-aaa.conf" "rm -f /etc/ssh/sshd_config.d/00-aaa.conf" "authorizedkeyscommand is '/usr/local/bin/oc-keys'"
+mutation DEP-01 "an earlier sshd drop-in sets a global AuthorizedKeysCommand, and so also a user to run it" \
+  "printf 'AuthorizedKeysCommand /usr/local/bin/oc-keys\nAuthorizedKeysCommandUser root\n' >/etc/ssh/sshd_config.d/00-aaa.conf" "rm -f /etc/ssh/sshd_config.d/00-aaa.conf" "authorizedkeyscommanduser is 'root'"
+mutation DEP-01 "an earlier sshd drop-in sets only AuthorizedKeysCommandUser" \
+  "printf 'AuthorizedKeysCommandUser nobody\n' >/etc/ssh/sshd_config.d/00-aaa.conf" "rm -f /etc/ssh/sshd_config.d/00-aaa.conf" "authorizedkeyscommanduser is 'nobody'"
+mutation DEP-01 "an earlier sshd drop-in trusts a certificate authority (TrustedUserCAKeys: a certificate carries its own options, not the key lines')" \
+  "cp $work/keys/alice.pub /etc/ssh/oc-test-ca.pub && printf 'TrustedUserCAKeys /etc/ssh/oc-test-ca.pub\n' >/etc/ssh/sshd_config.d/00-aaa.conf" \
+  "rm -f /etc/ssh/sshd_config.d/00-aaa.conf /etc/ssh/oc-test-ca.pub" "trustedusercakeys is '/etc/ssh/oc-test-ca.pub'"
+mutation DEP-01 "an earlier sshd drop-in sets an AuthorizedPrincipalsFile" \
+  "printf 'AuthorizedPrincipalsFile .ssh/authorized_principals\n' >/etc/ssh/sshd_config.d/00-aaa.conf" "rm -f /etc/ssh/sshd_config.d/00-aaa.conf" "authorizedprincipalsfile is '.ssh/authorized_principals'"
+mutation DEP-01 "the deploy user's own Match block sets an AuthorizedKeysCommand" \
+  "cp -p $ddrop $dbak/drop && sed -i '/^Match User oc-deploy\$/a AuthorizedKeysCommand /usr/local/bin/oc-keys' $ddrop" "cp -p $dbak/drop $ddrop" "authorizedkeyscommand is '/usr/local/bin/oc-keys'"
+# the four settings are "none" on the real system (positive control for the four above: they are looked at)
+yes_if "sshd answers none for all four settings for the deploy user (positive control)" bash -c "
+  out=\$(sshd -T -C user=oc-deploy,host=x,addr=203.0.113.1)
+  grep -qx 'authorizedkeyscommand none' <<<\"\$out\" && grep -qx 'authorizedkeyscommanduser none' <<<\"\$out\" && grep -qx 'trustedusercakeys none' <<<\"\$out\" && grep -qx 'authorizedprincipalsfile none' <<<\"\$out\""
+
+
 # --- DEP-02: what the deploy user can reach, tried as that user
 mutation DEP-02 "a secret file is readable by everyone" "chmod 0644 /etc/oc/prod.env" "chmod 0640 /etc/oc/prod.env" "can read /etc/oc/prod.env"
 mutation DEP-02 "the deploy user is in the group of an environment (it can read the env files)" "usermod -aG oc-prod oc-deploy" "gpasswd -d oc-deploy oc-prod" "can read /etc/oc/prod.env"
@@ -845,6 +868,22 @@ mutation DEP-02 "/usr/local/sbin is writable by everyone" "chmod 0777 /usr/local
 mutation DEP-02 "the deploy user's home is writable by everyone" "chmod 0777 /var/lib/oc-deploy" "chmod 0755 /var/lib/oc-deploy" "can write /var/lib/oc-deploy"
 mutation DEP-02 "an environment's data folder is missing (so it cannot be checked, which is a failure)" \
   "mv /var/lib/oc/prod/tmp $dbak/prodtmp" "mv $dbak/prodtmp /var/lib/oc/prod/tmp" "/var/lib/oc/prod/tmp does not exist, so it cannot be checked"
+
+# --- DEP-02, Task 4b: MariaDB's data folder and socket, /var/log, a missing /etc/oc
+# --- DEP-02 ------------------------------------------------------------------------------------
+mutation DEP-02 "/etc/oc is missing (a folder that is not there cannot be tried, so it is a failure, not a pass)" \
+  "mv /etc/oc /etc/oc.gone" "mv /etc/oc.gone /etc/oc" "/etc/oc does not exist, so it cannot be checked"
+mutation DEP-02 "a MariaDB data file is readable by everyone" \
+  "chmod 0644 /var/lib/mysql/ibdata1" "chmod 0660 /var/lib/mysql/ibdata1" "can read in the MariaDB data folder: /var/lib/mysql/ibdata1"
+mutation DEP-02 "the MariaDB data folder is missing (it cannot be checked)" \
+  "mv /var/lib/mysql /var/lib/mysql.gone" "mv /var/lib/mysql.gone /var/lib/mysql" "/var/lib/mysql does not exist, so it cannot be checked"
+mutation DEP-02 "the deploy user can sign in to MariaDB through its socket (a unix_socket account of its own name)" \
+  "mariadb -e \"CREATE USER 'oc-deploy'@'localhost' IDENTIFIED VIA unix_socket\"" "mariadb -e \"DROP USER 'oc-deploy'@'localhost'\"" "oc-deploy can sign in to MariaDB through its socket as 'oc-deploy'"
+mutation DEP-02 "the MariaDB socket is not where the verifier looks (so no sign-in could be tried: that is a failure)" \
+  "mv /run/mysqld/mysqld.sock /run/mysqld/mysqld.sock.moved" "mv /run/mysqld/mysqld.sock.moved /run/mysqld/mysqld.sock" "the MariaDB socket /run/mysqld/mysqld.sock does not exist"
+mutation DEP-02 "/var/log can be written by everyone" "chmod 0777 /var/log" "chmod 0755 /var/log" "can write /var/log"
+mutation DEP-02 "the sudo log is readable by everyone" "chmod 0644 /var/log/sudo.log" "chmod 0600 /var/log/sudo.log" "can read /var/log/sudo.log"
+mutation DEP-02 "the audit log folder is readable by everyone" "chmod 0755 /var/log/audit" "chmod 0750 /var/log/audit" "can read /var/log/audit"
 
 # --- Task 4b, step 1: NET-03 false passes ------------------------------------------------------------
 cacert=/etc/nginx/oc/cloudflare-origin-pull-ca.pem
@@ -1548,6 +1587,13 @@ expect_fail_because "ssh_assert_effective notices that passwords are on for the 
 expect_fail_because "ssh_assert_effective notices root login for the deploy user only" "for oc-deploy" assert_with_fake_sshd 's/^permitrootlogin no$/permitrootlogin yes/'
 expect_fail_because "ssh_assert_effective notices a terminal for the deploy user (its Match block did not apply)" "the Match block did not take effect" assert_with_fake_sshd 's/^permittty no$/permittty yes/'
 expect_fail_because "ssh_assert_effective notices another forced command for the deploy user" "the Match block did not take effect" assert_with_fake_sshd 's|^forcecommand .*|forcecommand /bin/sh|'
+expect_fail_because "ssh_assert_effective notices an AuthorizedKeysCommand for the deploy user" "another way to sign in as oc-deploy" assert_with_fake_sshd 's|^authorizedkeyscommand none$|authorizedkeyscommand /usr/local/bin/oc-keys|'
+expect_fail_because "ssh_assert_effective notices an AuthorizedKeysCommandUser for the deploy user" "authorizedkeyscommanduser root" assert_with_fake_sshd 's|^authorizedkeyscommanduser none$|authorizedkeyscommanduser root|'
+expect_fail_because "ssh_assert_effective notices a TrustedUserCAKeys for the deploy user" "trustedusercakeys /etc/ssh/ca.pub" assert_with_fake_sshd 's|^trustedusercakeys none$|trustedusercakeys /etc/ssh/ca.pub|'
+expect_fail_because "ssh_assert_effective notices an AuthorizedPrincipalsFile for the deploy user" "authorizedprincipalsfile .ssh/principals" assert_with_fake_sshd 's|^authorizedprincipalsfile none$|authorizedprincipalsfile .ssh/principals|'
+printf 'AuthorizedKeysCommand /usr/local/bin/oc-keys\nAuthorizedKeysCommandUser root\n' >/etc/ssh/sshd_config.d/00-aaa.conf
+expect_fail_because "the bootstrap stops when an earlier drop-in gives the deploy user an AuthorizedKeysCommand (with the real sshd)" "another way to sign in as oc-deploy" bash "$infra/bootstrap.sh"
+rm -f /etc/ssh/sshd_config.d/00-aaa.conf
 # shellcheck disable=SC2016  # the bash -c program is single-quoted on purpose
 expect_fail_because "ssh_assert_effective notices a deploy user who is not in AllowUsers" "sshd would allow" bash -c '
   source "$1/lib/common.sh"; source "$1/lib/ssh.sh"

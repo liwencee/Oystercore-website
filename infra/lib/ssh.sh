@@ -175,6 +175,16 @@ ssh_assert_effective() {
     [permituserenvironment]=no
     [maxsessions]=1
   )
+  # With no ForceCommand here, only the key lines' command= forces the command. These settings are
+  # other ways to sign in as the deploy user that never read those lines: a program that prints keys,
+  # a certificate authority whose certificates carry their own options, a principals file. All must be
+  # off (the default, "none"), whichever file of the configuration would switch one on.
+  declare -A deploy_forbid=(
+    [authorizedkeyscommand]=none
+    [authorizedkeyscommanduser]=none
+    [trustedusercakeys]=none
+    [authorizedprincipalsfile]=none
+  )
   # A Match block that is not ours could change these for some connections only.
   foreign=$(ssh_foreign_match)
   [[ -z $foreign ]] || oc_die "the sshd configuration has a Match or Include line that this setup did not write ($(printf '%s' "$foreign" | head -n 1)); it could change the rules above for some connections. Nothing was reloaded."
@@ -191,6 +201,11 @@ ssh_assert_effective() {
         got=$(ssh_effective "$key" "$user")
         want=${deploy_expect[$key]}
         [[ $got == "$want" ]] || oc_die "sshd would use '$key $got' instead of '$key $want' for $user; the Match block did not take effect. Nothing was reloaded."
+      done
+      for key in "${!deploy_forbid[@]}"; do
+        got=$(ssh_effective "$key" "$user")
+        want=${deploy_forbid[$key]}
+        [[ $got == "$want" ]] || oc_die "sshd would use '$key $got' for $user: another way to sign in as $user that does not go through the key lines' command= (want '$key $want'). Another file in /etc/ssh sets it. Nothing was reloaded."
       done
     fi
   done
