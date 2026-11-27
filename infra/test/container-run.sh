@@ -698,6 +698,8 @@ qmutation "the web container's Pull=never becomes Pull=always" "$qweb" 's/^Pull=
 qmutation "the CMS container gets Pull=missing" "$qcms" 's/^Pull=never$/Pull=missing/' "Pull is not never"
 qmutation "the CMS container gets a second Pull line" "$qcms" 's|^Pull=never$|&\nPull=always|' "Pull appears 2 times"
 qmutation "the web container gets Pull = always (spaces around =)" "$qweb" 's|^Pull=never$|Pull = always|' "Pull is not never"
+qmutation "the web container's Tmpfs gets the exec option" "$qweb" 's|^Tmpfs=.*|Tmpfs=/tmp:rw,exec,nosuid,size=64m|' "Tmpfs has the option 'exec'"
+qmutation "the CMS container's Tmpfs is not for /tmp" "$qcms" 's|^Tmpfs=.*|Tmpfs=/var/lib/oc:rw,noexec|' "Tmpfs is not for /tmp"
 
 section "the deploy account: every way of widening it must be noticed"
 yes_if "before the changes: DEP-01, DEP-02, SSH-01, SSH-02 and SSH-03 pass on the untouched system (so a FAIL below is caused by the change)" \
@@ -1062,6 +1064,62 @@ if [[ $out == FAIL\ CTR-04\ * && $out == *"oc-cms-prod: the container is privile
 rm -rf "$c4"
 
 
+# --- Task 4b, step 3: the verifier says only what it checked ---------------------------------------------
+# NET-01: ufw's IPv6 setting
+mutation NET-01 "ufw is told to leave IPv6 alone (IPV6=no)" \
+  "sed -i 's/^IPV6=.*/IPV6=no/' /etc/default/ufw" "sed -i 's/^IPV6=.*/IPV6=yes/' /etc/default/ufw" "IPV6=yes"
+# SVC-02: a line that starts with ; is a variable name to Podman, not a comment
+wmutation "the website's file has a line that starts with ; (Podman reads only # as a comment, so this is a variable)" "printf ';DATABASE_PASSWORD=x\n' >>$wfile" "a line that is not NAME=value"
+wmutation "the website's file has an indented ; line" "printf '   ;SECRET=x\n' >>$wfile" "a line that is not NAME=value"
+cp -p "$wfile" "$qbak/web.env.orig"
+printf '# a real comment\n   # an indented comment\n\n' >>"$wfile"
+VERIFY_ONLY=SVC-02 bash "$infra/verify.sh" >"$work/verify-svc02-comment.txt" 2>&1 || true
+mv -f "$qbak/web.env.orig" "$wfile"
+yes_if "comment lines that start with # (also indented) and empty lines are fine in the website's file (positive control)" grep -q '^PASS SVC-02 ' "$work/verify-svc02-comment.txt"
+
+# NGX-01: server_tokens and client_max_body_size wherever they stand, and in any case
+mutation NGX-01 "server_tokens is switched on in a one-line server" \
+  "printf 'server { listen 8461; server_tokens on; server_name tok.example.test; }\n' >$ngxsrv" "rm -f $ngxsrv" "server_tokens is 'on' somewhere"
+mutation NGX-01 "server_tokens is switched on after a # in the middle of a word on the same line" \
+  "printf 'server { listen 8462; add_header X a#b; server_tokens build; server_name tok2.example.test; }\n' >$ngxsrv" "rm -f $ngxsrv" "server_tokens is 'build' somewhere"
+mutation NGX-01 "server_tokens is written in upper case (ON)" \
+  "printf 'server { listen 8463; server_tokens ON; server_name tok3.example.test; }\n' >$ngxsrv" "rm -f $ngxsrv" "server_tokens is 'ON' somewhere"
+mutation NGX-01 "a one-line server lifts the request size limit (client_max_body_size 0)" \
+  "printf 'server { listen 8464; client_max_body_size 0; server_name big.example.test; }\n' >$ngxsrv" "rm -f $ngxsrv" "client_max_body_size is '0' somewhere"
+mutation NGX-01 "a one-line server raises the request size limit (client_max_body_size 2g)" \
+  "printf 'server { listen 8465; client_max_body_size 2g; server_name big2.example.test; }\n' >$ngxsrv" "rm -f $ngxsrv" "client_max_body_size is '2g' somewhere"
+printf 'server { listen 8466; client_max_body_size 30M; server_tokens OFF; server_name ok.example.test; return 404; }\n' >"$ngxsrv"
+VERIFY_ONLY=NGX-01 bash "$infra/verify.sh" >"$work/verify-ngx01-ok.txt" 2>&1 || true
+rm -f "$ngxsrv"
+yes_if "'client_max_body_size 30M;' and 'server_tokens OFF;' in a one-line server are accepted (positive control)" grep -q '^PASS NGX-01 ' "$work/verify-ngx01-ok.txt"
+
+# DB-01: no account but the environment's own may hold any privilege on its database
+mutation DB-01 "an account with another name (backup) has SELECT on the prod database" \
+  "mariadb -e \"CREATE USER 'backup'@'localhost' IDENTIFIED BY 'x'; GRANT SELECT ON \\\`oc_prod\\\`.* TO 'backup'@'localhost'\"" \
+  "mariadb -e \"DROP USER 'backup'@'localhost'\"" "oc_prod can also be reached by: 'backup'@'localhost' (on the database)"
+mutation DB-01 "an account is granted a database PATTERN that matches the prod database (oc%)" \
+  "mariadb -e \"CREATE USER 'ops'@'localhost'; GRANT SELECT ON \\\`oc%\\\`.* TO 'ops'@'localhost'\"" \
+  "mariadb -e \"DROP USER 'ops'@'localhost'\"" "oc_prod can also be reached by: 'ops'@'localhost' (on the database)"
+mutation DB-01 "an account may read one table of the prod database" \
+  "mariadb -e \"CREATE TABLE oc_prod.t1 (a INT); CREATE USER 'rpt'@'localhost'; GRANT SELECT ON oc_prod.t1 TO 'rpt'@'localhost'\"" \
+  "mariadb -e \"DROP USER 'rpt'@'localhost'; DROP TABLE oc_prod.t1\"" "'rpt'@'localhost' (on a table)"
+mutation DB-01 "an account may read one column of a table of the staging database" \
+  "mariadb -e \"CREATE TABLE oc_staging.t1 (a INT); CREATE USER 'rpt'@'localhost'; GRANT SELECT (a) ON oc_staging.t1 TO 'rpt'@'localhost'\"" \
+  "mariadb -e \"DROP USER 'rpt'@'localhost'; DROP TABLE oc_staging.t1\"" "oc_staging can also be reached by: 'rpt'@'localhost' (on a column)"
+mutation DB-01 "an account has a global privilege (SELECT ON *.*)" \
+  "mariadb -e \"CREATE USER 'dba'@'localhost'; GRANT SELECT ON *.* TO 'dba'@'localhost'\"" \
+  "mariadb -e \"DROP USER 'dba'@'localhost'\"" "'dba'@'localhost' (global)"
+mutation DB-01 "an account that may be used from any host has ALL on the staging database" \
+  "mariadb -e \"CREATE USER 'remote'@'%'; GRANT ALL ON \\\`oc_staging\\\`.* TO 'remote'@'%'\"" \
+  "mariadb -e \"DROP USER 'remote'@'%'\"" "oc_staging can also be reached by: 'remote'@'%'"
+mutation DB-01 "the other environment's account may read this environment's database" \
+  "mariadb -e \"GRANT SELECT ON \\\`oc_staging\\\`.* TO 'oc_prod'@'localhost'\"" \
+  "mariadb -e \"REVOKE SELECT ON \\\`oc_staging\\\`.* FROM 'oc_prod'@'localhost'\"" "oc_staging can also be reached by: 'oc_prod'@'localhost' (on the database)"
+mariadb -e "CREATE USER 'idle'@'localhost'"
+VERIFY_ONLY=DB-01 bash "$infra/verify.sh" >"$work/verify-db-idle.txt" 2>&1 || true
+mariadb -e "DROP USER 'idle'@'localhost'"
+yes_if "an account with no privileges at all is left alone (positive control: DB-01 does not fail on every extra account)" grep -q '^PASS DB-01 ' "$work/verify-db-idle.txt"
+
 # --- VERIFY_CONTAINER=1 on a real host must not quietly skip the live checks ---
 realhost_made=0
 if [[ ! -d /run/systemd/system ]]; then
@@ -1152,6 +1210,20 @@ gen_case "--pull never replaced by --pull always" web "--pull never" "--pull alw
 gen_case "--pull never replaced by --pull=missing" web "--pull never" "--pull=missing" "--pull is 'missing'"
 gen_case "--pull never removed" web " --pull never" "" "lacks: --pull"
 
+# Task 4b: a switch with a value, and the tmpfs options
+yes_if "the real generated web command has no problem (positive control)" test -z "$(gen_problems web "$web_line")"
+gen_case "--read-only=false" web " --read-only" " --read-only=false" "--read-only is 'false'"
+gen_case "--read-only=0" web " --read-only" " --read-only=0" "--read-only is '0'"
+gen_case "--rm=false" web " --rm" " --rm=false" "--rm is 'false'"
+gen_case "--replace=false" web " --replace" " --replace=false" "--replace is 'false'"
+gen_case "-d=false" web " -d" " -d=false" "-d is 'false'"
+yes_if "--read-only=true is accepted (positive control: the switch value is read, not refused)" test -z "$(gen_problems web "${web_line/ --read-only/ --read-only=true}")"
+gen_case "a tmpfs with exec" web "noexec,nosuid" "noexec,exec,nosuid" "has the option 'exec'"
+gen_case "a tmpfs that is only exec (--tmpfs /tmp:rw,exec)" web "/tmp:rw,noexec,nosuid,size=64m" "/tmp:rw,exec,size=64m" "has the option 'exec'"
+gen_case "a tmpfs with suid" web "noexec,nosuid" "noexec,suid" "has the option 'suid'"
+gen_case "a tmpfs with dev" web "noexec,nosuid" "noexec,nosuid,dev" "has the option 'dev'"
+gen_case "a tmpfs that is not /tmp" web "--tmpfs /tmp:" "--tmpfs /var/lib/oc:" "is not for /tmp"
+
 # The generated units: only the one ExecStart (checked flag by flag) and the generator's own
 # podman rm in ExecStop and ExecStopPost may run anything. Crafted copies of the real output.
 gen_prod=$(QUADLET_UNIT_DIRS=/home/oc-prod/.config/containers/systemd "$quadlet" -dryrun -user 2>&1)
@@ -1240,7 +1312,10 @@ mv -f "$work/staging.web.env.orig" /etc/oc/staging.web.env
 section "a certificate installed by the owner is kept, accepted, and ends the warning"
 own="$work/owncert"
 mkdir -p "$own"
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 -subj "/CN=Test Origin CA" \
+# Cloudflare's Origin CA calls itself "CloudFlare Origin SSL Certificate Authority"; a copy of its root is not
+# kept in this repository, so TLS-01 recognises the Origin CA by that name and the test CA takes it.
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 \
+  -subj "/C=US/O=CloudFlare, Inc./OU=CloudFlare Origin SSL Certificate Authority/L=San Francisco/ST=California" \
   -keyout "$own/ca.key" -out "$own/ca.pem" >/dev/null 2>&1
 openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -subj "/CN=example.test" \
   -keyout "$own/leaf.key" -out "$own/leaf.csr" >/dev/null 2>&1
@@ -1264,6 +1339,29 @@ yes_if "the bootstrap kept the Image= line the deploy script set" grep -q '^Imag
 sed 's|^Image=.*|Image=localhost/oc-web:bootstrap|' "$qweb" >"$work/q.tmp" && cat "$work/q.tmp" >"$qweb"
 bash "$infra/verify.sh" >"$work/verify-owncert.txt" 2>&1 || true
 yes_if "TLS-01 passes (no warning) with a real certificate" grep -q '^PASS TLS-01 ' "$work/verify-owncert.txt"
+yes_if "TLS-01 says it was issued by Cloudflare's Origin CA (recognised by its name)" grep -q "^PASS TLS-01 .*issued by Cloudflare's Origin CA" "$work/verify-owncert.txt"
+# A certificate from a CA that is neither Cloudflare's nor trusted would be answered with error 526 by Cloudflare.
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 -subj "/CN=Test Origin CA" \
+  -keyout "$own/other-ca.key" -out "$own/other-ca.pem" >/dev/null 2>&1
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -subj "/CN=example.test" \
+  -keyout "$own/other.key" -out "$own/other.csr" >/dev/null 2>&1
+openssl x509 -req -in "$own/other.csr" -CA "$own/other-ca.pem" -CAkey "$own/other-ca.key" -CAcreateserial -days 30 \
+  -out "$own/other.crt" >/dev/null 2>&1
+install -m 0644 -o root -g root "$own/other.crt" /etc/ssl/oc/origin.pem
+install -m 0600 -o root -g root "$own/other.key" /etc/ssl/oc/origin.key
+VERIFY_ONLY=TLS-01 bash "$infra/verify.sh" >"$work/verify-othercert.txt" 2>&1 || true
+yes_if "TLS-01 FAILs for a certificate from a private CA (neither Cloudflare's Origin CA nor publicly trusted)" grep -q "^FAIL TLS-01 the origin certificate's issuer (CN = Test Origin CA) is neither Cloudflare's Origin CA nor a publicly trusted CA" "$work/verify-othercert.txt"
+# the same certificate once the system trusts its CA: the chain verifies, so it is publicly trusted as far as this machine can tell
+cp "$own/other-ca.pem" /usr/local/share/ca-certificates/oc-test-ca.crt
+update-ca-certificates >/dev/null 2>&1
+VERIFY_ONLY=TLS-01 bash "$infra/verify.sh" >"$work/verify-trustedcert.txt" 2>&1 || true
+rm -f /usr/local/share/ca-certificates/oc-test-ca.crt
+update-ca-certificates --fresh >/dev/null 2>&1
+yes_if "TLS-01 passes when the CA is in the system's trust store (positive control: the chain is really verified)" grep -q '^PASS TLS-01 .*issued by a publicly trusted CA' "$work/verify-trustedcert.txt"
+VERIFY_ONLY=TLS-01 bash "$infra/verify.sh" >"$work/verify-othercert2.txt" 2>&1 || true
+yes_if "and it FAILs again once that CA is out of the trust store" grep -q '^FAIL TLS-01 .*neither Cloudflare' "$work/verify-othercert2.txt"
+install -m 0644 -o root -g root "$own/leaf.crt" /etc/ssl/oc/origin.pem
+install -m 0600 -o root -g root "$own/leaf.key" /etc/ssl/oc/origin.key
 expect "nginx -t passes with the owner's certificate" nginx -t
 cp -p "$own/placeholder.pem" /etc/ssl/oc/origin.pem
 cp -p "$own/placeholder.key" /etc/ssl/oc/origin.key

@@ -724,6 +724,12 @@ check_net_01() {
     fail "/etc/default/ufw does not deny incoming and allow outgoing by default"
     return 0
   fi
+  # With IPV6=no ufw leaves IPv6 alone: the IPv6 rules (the Cloudflare IPv6 ranges, SSH) would not
+  # be loaded and the default policy would not apply to IPv6 traffic.
+  if ! grep -q '^IPV6=yes$' /etc/default/ufw 2>/dev/null; then
+    fail "/etc/default/ufw does not say IPV6=yes, so ufw would not filter IPv6 traffic at all (set IPV6=yes, then run: ufw reload)"
+    return 0
+  fi
   if in_container; then
     pass "ufw is set to deny incoming and allow outgoing (configuration)"
     return 0
@@ -1257,6 +1263,29 @@ q_env_file() {
   fi
 }
 
+# q_tmpfs_problem VALUE: why a tmpfs mount may not be used (nothing when it is fine). It is for /tmp
+# only, and its options may not turn on what Podman leaves off by default for a tmpfs (exec, suid,
+# dev): "exec" after "noexec" wins, so a plain search for noexec would not be enough.
+q_tmpfs_problem() {
+  local val=$1 o
+  local -a opts=()
+  if [[ $val != /tmp && $val != /tmp:* ]]; then
+    echo "is not for /tmp"
+    return 0
+  fi
+  [[ $val == *:* ]] || return 0
+  IFS=, read -r -a opts <<<"${val#*:}"
+  for o in "${opts[@]}"; do
+    case $o in
+      exec | suid | dev)
+        echo "has the option '$o' (the tmpfs must stay noexec, nosuid and nodev)"
+        return 0
+        ;;
+      *) ;;
+    esac
+  done
+}
+
 # q_check_container FILE ENV ROLE: one problem per line for a Quadlet container file.
 q_check_container() {
   local f=$1 env=$2 role=$3 qn uid gid sec key val allowed n v arg expected host_port internal got
@@ -1307,7 +1336,8 @@ q_check_container() {
   [[ $(qget Container DropCapability) == ALL ]] || echo "DropCapability is not ALL"
   [[ $(qget Container NoNewPrivileges) == true ]] || echo "NoNewPrivileges is not true"
   [[ $(qget Container PidsLimit) =~ ^[1-9][0-9]*$ ]] || echo "no PidsLimit (a positive number)"
-  [[ $(qget Container Tmpfs) == /tmp* ]] || echo "Tmpfs is not for /tmp"
+  v=$(q_tmpfs_problem "$(qget Container Tmpfs)")
+  [[ -z $v ]] || echo "Tmpfs $v"
   expected=$(q_env_file "$env" "$role")
   [[ $(qget Container EnvironmentFile) == "$expected" ]] || echo "EnvironmentFile is not $expected"
   [[ $(qget Container Network) == "oc-$env.network" ]] || echo "Network is not oc-$env.network (the private network)"
@@ -1400,14 +1430,20 @@ q_check_generated() {
     flag=$t
     val=""
     hasval=0
-    if [[ $t == --*=* ]]; then
+    if [[ $t == --*=* || $t == -d=* ]]; then
       flag=${t%%=*}
       val=${t#*=}
       hasval=1
     fi
     case $flag in
       --replace | --rm | -d | --read-only)
-        seen[$flag]=1
+        # A switch: bare (on), or =true. "--read-only=false" and "--rm=false" are the same flags
+        # with the opposite meaning, so a value is checked, not skipped.
+        if ((hasval)) && [[ $val != true ]]; then
+          echo "$flag is '$val': this switch must be bare (or =true), a value switches it off"
+        else
+          seen[$flag]=1
+        fi
         continue
         ;;
       --name | --cidfile | --cgroups | --network | --sdnotify | --security-opt | --pids-limit | --cap-drop | --user | --userns | --tmpfs | -v | --publish | --env | --env-file | --health-cmd | --health-interval | --health-retries | --health-start-period | --health-timeout | --group-add | --memory | --memory-swap | --pull)
@@ -1432,7 +1468,10 @@ q_check_generated() {
       --pids-limit) [[ $val =~ ^[1-9][0-9]*$ ]] || echo "--pids-limit '$val' is not a positive number" ;;
       --memory | --memory-swap) [[ $val =~ ^[1-9][0-9]*[kKmMgG]?$ ]] || echo "$flag '$val' is not a size" ;;
       --pull) [[ $val == never ]] || echo "--pull is '$val', not never" ;;
-      --tmpfs) [[ $val == /tmp* ]] || echo "--tmpfs '$val' is not for /tmp" ;;
+      --tmpfs)
+        v=$(q_tmpfs_problem "$val")
+        [[ -z $v ]] || echo "--tmpfs '$val' $v"
+        ;;
       --publish) [[ $val == "127.0.0.1:$hp:$ip" ]] || echo "--publish '$val' is not exactly 127.0.0.1:$hp:$ip" ;;
       --env-file) [[ $val == "$(q_env_file "$env" "$role")" ]] || echo "--env-file is '$val', not $(q_env_file "$env" "$role")" ;;
       --group-add) [[ $val == keep-groups && $role == cms ]] || echo "--group-add '$val' is not allowed here" ;;
@@ -1894,11 +1933,14 @@ check_svc_02() {
       done
       [[ -z $missing ]] || bad+=" [$web lacks:$missing]"
       # The website's file holds ONLY the website's keys. Anything else (a database setting,
-      # a JWT secret, the file master key, ...) is a secret the website must not have.
+      # a JWT secret, the file master key, ...) is a secret the website must not have. Podman reads
+      # an environment file the way its own parser does: leading whitespace is dropped, and only a
+      # line that starts with # is a comment. A line that starts with ; is NOT a comment there: it
+      # is a variable whose name starts with ;, so it is looked at like any other line.
       extra=""
       while IFS= read -r line; do
         line=${line#"${line%%[![:space:]]*}"}
-        [[ -z $line || $line == \#* || $line == \;* ]] && continue
+        [[ -z $line || $line == \#* ]] && continue
         if [[ $line =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; then
           key=${BASH_REMATCH[1]}
           word_in "${USERS_WEB_KEYS[*]}" "$key" || extra+=" $key"
@@ -2027,6 +2069,27 @@ check_db_01() {
     [[ -n $line ]] || continue
     word_in " $(printf 'oc_%s@localhost ' "${OC_ENV_LIST[@]}")" "$line" || bad+=" [unexpected account $line]"
   done <<<"$extra"
+  # No account but the environment's own may hold ANY privilege on its database, whatever the
+  # account is called (a backup user, a monitoring user, a leftover): the grants are read from the
+  # server, at every level a privilege can be given: the database (the name may be a pattern, such as
+  # oc%), a table, a column, and globally (ON *.*). The only global accounts are the ones the server
+  # itself makes: root (unix socket), mariadb.sys and mysql.
+  for env in "${OC_ENV_LIST[@]}"; do
+    db="oc_$env"
+    other=$(mariadb -N -B 2>/dev/null <<SQL
+SELECT DISTINCT CONCAT(GRANTEE, ' (', LEVEL, ')') FROM (
+  SELECT GRANTEE, 'on the database' AS LEVEL FROM information_schema.SCHEMA_PRIVILEGES WHERE '$db' LIKE TABLE_SCHEMA
+  UNION ALL SELECT GRANTEE, 'on a table' FROM information_schema.TABLE_PRIVILEGES WHERE TABLE_SCHEMA = '$db'
+  UNION ALL SELECT GRANTEE, 'on a column' FROM information_schema.COLUMN_PRIVILEGES WHERE TABLE_SCHEMA = '$db'
+  UNION ALL SELECT GRANTEE, 'global' FROM information_schema.USER_PRIVILEGES WHERE PRIVILEGE_TYPE <> 'USAGE'
+) AS g
+WHERE GRANTEE <> '''oc_$env''@''localhost'''
+  AND GRANTEE NOT IN ('''root''@''localhost''', '''mariadb.sys''@''localhost''', '''mysql''@''localhost''')
+ORDER BY 1;
+SQL
+    ) || other="(the grants could not be read)"
+    [[ -z $other ]] || bad+=" [$db can also be reached by: $(printf '%s' "$other" | tr '\n' ',' | sed 's/,$//')]"
+  done
   if [[ -n $bad ]]; then
     fail "database accounts are wrong:$bad"
   else
@@ -2075,7 +2138,7 @@ check_pkg_02() {
 
 # --- TLS certificate ---------------------------------------------------------------
 check_tls_01() {
-  local subject issuer a b
+  local subject issuer a b kind
   if [[ ! -s $OC_TLS_CERT || ! -s $OC_TLS_KEY ]]; then
     fail "the origin certificate or key is missing ($OC_TLS_CERT, $OC_TLS_KEY)"
     return 0
@@ -2098,9 +2161,24 @@ check_tls_01() {
   issuer=$(openssl x509 -in "$OC_TLS_CERT" -noout -issuer 2>/dev/null)
   if [[ $subject == *oc-placeholder* || ${subject#subject=} == "${issuer#issuer=}" ]]; then
     warn "the PLACEHOLDER self-signed origin certificate is still in use: install a Cloudflare origin certificate at $OC_TLS_CERT (Full (strict) mode refuses this one)"
-  else
-    pass "a real origin certificate is installed ($(openssl x509 -in "$OC_TLS_CERT" -noout -enddate | sed 's/^notAfter=/expires /'))"
+    return 0
   fi
+  # Cloudflare in Full (strict) mode accepts an origin certificate only if Cloudflare's own Origin CA
+  # issued it or a public CA did; anything else (a private CA, a staging CA) is answered with error 526.
+  # The Origin CA is recognised by its name, "CloudFlare Origin SSL Certificate Authority" (RSA) or
+  # "CloudFlare Origin SSL ECC Certificate Authority" (a copy of its root certificate is not kept in
+  # this repository, so the chain below it is not verified, only who the certificate says issued it);
+  # a public CA is recognised by really verifying the chain against the system's CA bundle.
+  if [[ ${issuer,,} == *"cloudflare origin"* ]]; then
+    kind="issued by Cloudflare's Origin CA"
+  elif openssl verify -purpose sslserver -CAfile /etc/ssl/certs/ca-certificates.crt -no-CApath -no-CAstore \
+    -untrusted "$OC_TLS_CERT" "$OC_TLS_CERT" >/dev/null 2>&1; then
+    kind="issued by a publicly trusted CA"
+  else
+    fail "the origin certificate's issuer (${issuer#issuer=}) is neither Cloudflare's Origin CA nor a publicly trusted CA (its chain does not verify against /etc/ssl/certs/ca-certificates.crt): Cloudflare in Full (strict) mode would refuse it with error 526"
+    return 0
+  fi
+  pass "a real origin certificate is installed, $kind ($(openssl x509 -in "$OC_TLS_CERT" -noout -enddate | sed 's/^notAfter=/expires /'))"
 }
 
 # --- units and the Cloudflare refresh ----------------------------------------------
