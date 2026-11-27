@@ -2190,8 +2190,58 @@ check_pkg_02() {
 }
 
 # --- TLS certificate ---------------------------------------------------------------
+# tls_origin_ca_name FILE: does the certificate's issuer carry exactly the name of Cloudflare's Origin CA?
+# Prints "ok|<the OU>" or "no|<why>". The issuer is read in openssl's multi-line form, one attribute per
+# line, so a value cannot be mistaken for the separator of another. The rules, with no substring and no
+# case-folding anywhere: exactly one O, exactly "CloudFlare, Inc."; exactly one OU, exactly one of the
+# two names of Cloudflare's Origin CA; and no attribute besides those and C, ST and L (a CN, a DC or an
+# extra OU is somewhere the text could be smuggled in).
+tls_origin_ca_name() {
+  local line type val o="" ou="" n_o=0 n_ou=0 any=0 why=""
+  local want_o="CloudFlare, Inc." ou_rsa="CloudFlare Origin SSL Certificate Authority" ou_ecc="CloudFlare Origin SSL ECC Certificate Authority"
+  while IFS= read -r line; do
+    [[ $line =~ ^[[:space:]]+([A-Za-z0-9.]+)[[:space:]]+=[[:space:]](.*)$ ]] || continue
+    any=1
+    type=${BASH_REMATCH[1]}
+    val=${BASH_REMATCH[2]}
+    case $type in
+      O)
+        n_o=$((n_o + 1))
+        o=$val
+        ;;
+      OU)
+        n_ou=$((n_ou + 1))
+        ou=$val
+        ;;
+      C | ST | L) ;;
+      *) why+="the issuer has a $type attribute, which Cloudflare's Origin CA does not have; " ;;
+    esac
+  done < <(openssl x509 -in "$1" -noout -issuer -nameopt multiline,sname 2>/dev/null)
+  if ((!any)); then
+    echo "no|the issuer could not be read"
+    return 0
+  fi
+  if ((n_o != 1)); then
+    why+="the issuer has $n_o O attributes, not exactly one; "
+  elif [[ $o != "$want_o" ]]; then
+    why+="O is '$o', not exactly '$want_o'; "
+  fi
+  if ((n_ou == 0)); then
+    why+="the issuer has no OU attribute; "
+  elif ((n_ou != 1)); then
+    why+="the issuer has $n_ou OU attributes, not exactly one; "
+  elif [[ $ou != "$ou_rsa" && $ou != "$ou_ecc" ]]; then
+    why+="OU is '$ou', not exactly '$ou_rsa' or '$ou_ecc'; "
+  fi
+  if [[ -z $why ]]; then
+    echo "ok|$ou"
+  else
+    echo "no|${why%; }"
+  fi
+}
+
 check_tls_01() {
-  local subject issuer a b kind
+  local subject issuer a b verdict
   if [[ ! -s $OC_TLS_CERT || ! -s $OC_TLS_KEY ]]; then
     fail "the origin certificate or key is missing ($OC_TLS_CERT, $OC_TLS_KEY)"
     return 0
@@ -2218,20 +2268,22 @@ check_tls_01() {
   fi
   # Cloudflare in Full (strict) mode accepts an origin certificate only if Cloudflare's own Origin CA
   # issued it or a public CA did; anything else (a private CA, a staging CA) is answered with error 526.
-  # The Origin CA is recognised by its name, "CloudFlare Origin SSL Certificate Authority" (RSA) or
-  # "CloudFlare Origin SSL ECC Certificate Authority" (a copy of its root certificate is not kept in
-  # this repository, so the chain below it is not verified, only who the certificate says issued it);
-  # a public CA is recognised by really verifying the chain against the system's CA bundle.
-  if [[ ${issuer,,} == *"cloudflare origin"* ]]; then
-    kind="issued by Cloudflare's Origin CA"
-  elif openssl verify -purpose sslserver -CAfile /etc/ssl/certs/ca-certificates.crt -no-CApath -no-CAstore \
-    -untrusted "$OC_TLS_CERT" "$OC_TLS_CERT" >/dev/null 2>&1; then
-    kind="issued by a publicly trusted CA"
-  else
-    fail "the origin certificate's issuer (${issuer#issuer=}) is neither Cloudflare's Origin CA nor a publicly trusted CA (its chain does not verify against /etc/ssl/certs/ca-certificates.crt): Cloudflare in Full (strict) mode would refuse it with error 526"
+  # Cloudflare's Origin CA is recognised by the NAME in the certificate's issuer, matched exactly, field
+  # by field (tls_origin_ca_name). That is all it is: a name the certificate chose itself. A copy of
+  # Cloudflare's Origin CA root is not kept in this repository, so the chain below it is NOT verified
+  # (Task 4c: verify it against Cloudflare's published roots), and the result line says so. A public CA
+  # is recognised by really verifying the chain against the system's CA bundle.
+  verdict=$(tls_origin_ca_name "$OC_TLS_CERT")
+  if [[ $verdict == ok\|* ]]; then
+    pass "a real origin certificate is installed; its issuer is named as Cloudflare's Origin CA ('${verdict#ok|}', O 'CloudFlare, Inc.'). Only that NAME was checked: the chain was NOT verified (no copy of Cloudflare's Origin CA root is kept here), so a private CA that copies the name would pass; verify the chain against Cloudflare's published Origin CA roots ($(openssl x509 -in "$OC_TLS_CERT" -noout -enddate | sed 's/^notAfter=/expires /'))"
     return 0
   fi
-  pass "a real origin certificate is installed, $kind ($(openssl x509 -in "$OC_TLS_CERT" -noout -enddate | sed 's/^notAfter=/expires /'))"
+  if openssl verify -purpose sslserver -CAfile /etc/ssl/certs/ca-certificates.crt -no-CApath -no-CAstore \
+    -untrusted "$OC_TLS_CERT" "$OC_TLS_CERT" >/dev/null 2>&1; then
+    pass "a real origin certificate is installed, issued by a publicly trusted CA ($(openssl x509 -in "$OC_TLS_CERT" -noout -enddate | sed 's/^notAfter=/expires /'))"
+  else
+    fail "the origin certificate's issuer (${issuer#issuer=}) is neither named exactly as Cloudflare's Origin CA (${verdict#no|}) nor a publicly trusted CA (its chain does not verify against /etc/ssl/certs/ca-certificates.crt): Cloudflare in Full (strict) mode would refuse it with error 526"
+  fi
 }
 
 # --- units and the Cloudflare refresh ----------------------------------------------

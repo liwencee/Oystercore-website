@@ -1422,7 +1422,7 @@ yes_if "the bootstrap kept the Image= line the deploy script set" grep -q '^Imag
 sed 's|^Image=.*|Image=localhost/oc-web:bootstrap|' "$qweb" >"$work/q.tmp" && cat "$work/q.tmp" >"$qweb"
 bash "$infra/verify.sh" >"$work/verify-owncert.txt" 2>&1 || true
 yes_if "TLS-01 passes (no warning) with a real certificate" grep -q '^PASS TLS-01 ' "$work/verify-owncert.txt"
-yes_if "TLS-01 says it was issued by Cloudflare's Origin CA (recognised by its name)" grep -q "^PASS TLS-01 .*issued by Cloudflare's Origin CA" "$work/verify-owncert.txt"
+yes_if "TLS-01 says its issuer is named as Cloudflare's Origin CA, and that only the name was checked" grep -q "^PASS TLS-01 .*issuer is named as Cloudflare's Origin CA.*the chain was NOT verified" "$work/verify-owncert.txt"
 # A certificate from a CA that is neither Cloudflare's nor trusted would be answered with error 526 by Cloudflare.
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 -subj "/CN=Test Origin CA" \
   -keyout "$own/other-ca.key" -out "$own/other-ca.pem" >/dev/null 2>&1
@@ -1433,7 +1433,7 @@ openssl x509 -req -in "$own/other.csr" -CA "$own/other-ca.pem" -CAkey "$own/othe
 install -m 0644 -o root -g root "$own/other.crt" /etc/ssl/oc/origin.pem
 install -m 0600 -o root -g root "$own/other.key" /etc/ssl/oc/origin.key
 VERIFY_ONLY=TLS-01 bash "$infra/verify.sh" >"$work/verify-othercert.txt" 2>&1 || true
-yes_if "TLS-01 FAILs for a certificate from a private CA (neither Cloudflare's Origin CA nor publicly trusted)" grep -q "^FAIL TLS-01 the origin certificate's issuer (CN = Test Origin CA) is neither Cloudflare's Origin CA nor a publicly trusted CA" "$work/verify-othercert.txt"
+yes_if "TLS-01 FAILs for a certificate from a private CA (neither Cloudflare's Origin CA nor publicly trusted)" grep -q "^FAIL TLS-01 the origin certificate's issuer (CN = Test Origin CA) is neither named exactly as Cloudflare's Origin CA" "$work/verify-othercert.txt"
 # the same certificate once the system trusts its CA: the chain verifies, so it is publicly trusted as far as this machine can tell
 cp "$own/other-ca.pem" /usr/local/share/ca-certificates/oc-test-ca.crt
 update-ca-certificates >/dev/null 2>&1
@@ -1443,6 +1443,66 @@ update-ca-certificates --fresh >/dev/null 2>&1
 yes_if "TLS-01 passes when the CA is in the system's trust store (positive control: the chain is really verified)" grep -q '^PASS TLS-01 .*issued by a publicly trusted CA' "$work/verify-trustedcert.txt"
 VERIFY_ONLY=TLS-01 bash "$infra/verify.sh" >"$work/verify-othercert2.txt" 2>&1 || true
 yes_if "and it FAILs again once that CA is out of the trust store" grep -q '^FAIL TLS-01 .*neither Cloudflare' "$work/verify-othercert2.txt"
+# Cloudflare's Origin CA is recognised by its name, matched exactly field by field: a lookalike must fail and say why
+# --- TLS-01: the issuer must be named EXACTLY as Cloudflare's Origin CA (or the chain must be public) ---------
+own=${own:-$work/owncert}
+mkdir -p "$own/issuer"
+ou_rsa="CloudFlare Origin SSL Certificate Authority"
+ou_ecc="CloudFlare Origin SSL ECC Certificate Authority"
+# tls_issuer_case SUBJECT: a CA with that subject signs a leaf, the leaf is installed, TLS-01 runs; prints its line
+tls_issuer_case() {
+  local d=$own/issuer
+  rm -f "$d"/*
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 -subj "$1" -keyout "$d/ca.key" -out "$d/ca.pem" >/dev/null 2>&1 || { echo "TEST BUG: no CA for $1"; return 0; }
+  openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -subj "/CN=example.test" -keyout "$d/leaf.key" -out "$d/leaf.csr" >/dev/null 2>&1
+  openssl x509 -req -in "$d/leaf.csr" -CA "$d/ca.pem" -CAkey "$d/ca.key" -CAcreateserial -days 30 -out "$d/leaf.crt" >/dev/null 2>&1
+  install -m 0644 -o root -g root "$d/leaf.crt" /etc/ssl/oc/origin.pem
+  install -m 0600 -o root -g root "$d/leaf.key" /etc/ssl/oc/origin.key
+  VERIFY_ONLY=TLS-01 bash "$infra/verify.sh" 2>&1 | grep '^[A-Z]* TLS-01 ' || true
+}
+tls_must_fail() { # DESCRIPTION SUBJECT REASON-TEXT
+  local out
+  out=$(tls_issuer_case "$2")
+  if [[ $out == "FAIL TLS-01 "* && $out == *"is neither named exactly as Cloudflare's Origin CA"* && $out == *"$3"* ]]; then
+    ok "TLS-01 FAILs for $1 (because: $3)"
+  else
+    notok "TLS-01 should fail for $1 (because: $3); it said: ${out:0:350}"
+  fi
+}
+tls_must_pass() { # DESCRIPTION SUBJECT OU
+  local out
+  out=$(tls_issuer_case "$2")
+  if [[ $out == "PASS TLS-01 "* && $out == *"issuer is named as Cloudflare's Origin CA ('$3'"* && $out == *"the chain was NOT verified"* && $out != *"publicly trusted"* ]]; then
+    ok "TLS-01 passes for $1, and says that only the name was checked and the chain was NOT verified"
+  else
+    notok "TLS-01 should pass for $1 as a name match only; it said: ${out:0:350}"
+  fi
+}
+# positive controls: both exact names, with and without the other attributes Cloudflare's certificate carries
+tls_must_pass "the RSA Origin CA's name (O, OU, C, L, ST)" "/C=US/O=CloudFlare, Inc./OU=$ou_rsa/L=San Francisco/ST=California" "$ou_rsa"
+tls_must_pass "the ECC Origin CA's name (O, OU, C, L, ST)" "/C=US/O=CloudFlare, Inc./OU=$ou_ecc/L=San Francisco/ST=California" "$ou_ecc"
+tls_must_pass "the RSA name with only O and OU" "/O=CloudFlare, Inc./OU=$ou_rsa" "$ou_rsa"
+tls_must_pass "the ECC name with only O and OU" "/O=CloudFlare, Inc./OU=$ou_ecc" "$ou_ecc"
+# a lookalike must fail, and say why
+tls_must_fail "an O that merely contains the text (O=not cloudflare origin)" "/O=not cloudflare origin" "O is 'not cloudflare origin'"
+tls_must_fail "an O that contains the text with an OU that is not Cloudflare's" "/O=not cloudflare origin/OU=x" "O is 'not cloudflare origin'"
+tls_must_fail "the right OU under the wrong O" "/O=Evil Inc./OU=$ou_rsa" "O is 'Evil Inc.'"
+tls_must_fail "the right O with the wrong OU" "/O=CloudFlare, Inc./OU=Something Else" "OU is 'Something Else'"
+tls_must_fail "the right O with no OU at all" "/O=CloudFlare, Inc." "no OU"
+tls_must_fail "an RSA OU with a suffix" "/O=CloudFlare, Inc./OU=$ou_rsa X" "OU is '$ou_rsa X'"
+tls_must_fail "an RSA OU with a prefix" "/O=CloudFlare, Inc./OU=X $ou_rsa" "OU is 'X $ou_rsa'"
+tls_must_fail "an ECC OU with a suffix" "/O=CloudFlare, Inc./OU=$ou_ecc X" "OU is '$ou_ecc X'"
+tls_must_fail "an ECC OU with a prefix" "/O=CloudFlare, Inc./OU=X $ou_ecc" "OU is 'X $ou_ecc'"
+tls_must_fail "an OU with a trailing space" "/O=CloudFlare, Inc./OU=$ou_rsa " "OU is '$ou_rsa '"
+tls_must_fail "the OU in upper case" "/O=CloudFlare, Inc./OU=${ou_rsa^^}" "OU is '${ou_rsa^^}'"
+tls_must_fail "the OU in lower case" "/O=CloudFlare, Inc./OU=${ou_ecc,,}" "OU is '${ou_ecc,,}'"
+tls_must_fail "the O in lower case" "/O=cloudflare, inc./OU=$ou_rsa" "O is 'cloudflare, inc.'"
+tls_must_fail "the O in upper case" "/O=CLOUDFLARE, INC./OU=$ou_ecc" "O is 'CLOUDFLARE, INC.'"
+tls_must_fail "the right O and OU plus a CN (an extra attribute could carry the text)" "/O=CloudFlare, Inc./OU=$ou_rsa/CN=x" "has a CN attribute"
+tls_must_fail "the name smuggled into a CN only" "/O=Evil/OU=Evil/CN=$ou_rsa" "has a CN attribute"
+tls_must_fail "a second OU" "/O=CloudFlare, Inc./OU=$ou_rsa/OU=extra" "2 OU attributes"
+tls_must_fail "a second O" "/O=CloudFlare, Inc./O=Evil/OU=$ou_rsa" "2 O attributes"
+tls_must_fail "the name only in the subject of the leaf's CA as a domain component" "/DC=cloudflare/O=CloudFlare, Inc./OU=$ou_rsa" "has a DC attribute"
 install -m 0644 -o root -g root "$own/leaf.crt" /etc/ssl/oc/origin.pem
 install -m 0600 -o root -g root "$own/leaf.key" /etc/ssl/oc/origin.key
 expect "nginx -t passes with the owner's certificate" nginx -t
