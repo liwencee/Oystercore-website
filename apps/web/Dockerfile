@@ -73,7 +73,7 @@ RUN pnpm --filter @oc/web deploy --prod /home/node/app \
         -type f -delete
 
 # ---- final stage -----------------------------------------------------------------------
-FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:f991e86a080567b6ab7c3392e36f7a0a4f9300639e526b48ee81b92d523af62e AS final
+FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:c73ddeb03e1dc2d579aa111c83d6699c6b8b487e35c0c631d4a3a20229fc25ee AS final
 
 # The group is written down as well as the user: a uid with no group runs with gid 0 when the
 # image's /etc/passwd has no entry for it, and infra/images/verify-image.sh refuses that.

@@ -17,7 +17,7 @@ built=()
 
 # The bases of the test images. Pinned like the real ones, so the test does not change by itself.
 # distroless12 is the Debian 12 variant, whose Node (22.22.0) is too old: a control for the version check.
-readonly distroless13='gcr.io/distroless/nodejs22-debian13:nonroot@sha256:f991e86a080567b6ab7c3392e36f7a0a4f9300639e526b48ee81b92d523af62e'
+readonly distroless13='gcr.io/distroless/nodejs22-debian13:nonroot@sha256:c73ddeb03e1dc2d579aa111c83d6699c6b8b487e35c0c631d4a3a20229fc25ee'
 readonly distroless12='gcr.io/distroless/nodejs22-debian12:nonroot@sha256:13593b7570658e8477de39e2f4a1dd25db2f836d68a0ba771251572d23bb4f8e'
 readonly node_slim='node:22-bookworm-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb'
 
