@@ -1175,6 +1175,50 @@ yes_if "verify.sh refuses VERIFY_CONTAINER=1 when systemd is running (FAIL CFG-0
 yes_if "and exits non-zero" test "$rc" -ne 0
 yes_if "and prints no PASS or SKIP line at all" bash -c "! grep -qE '^(PASS|SKIP) ' '$work/verify-realhost.txt'"
 
+# --- VERIFY_ONLY is for the test container only, and a subset run can never look like a full one -------------
+# vo_run ENV-ASSIGNMENT...: run verify.sh with those variables; the output is in $work/vo.txt, the status in $VO_RC
+vo_run() {
+  VO_RC=0
+  env "$@" bash "$infra/verify.sh" >"$work/vo.txt" 2>&1 || VO_RC=$?
+}
+vo_has() { grep -qE -- "$1" "$work/vo.txt"; }
+vo_no_check_ran() { [[ $(grep -cE '^(PASS|FAIL|WARN|SKIP) ' "$work/vo.txt") -eq 1 && $(grep -c '^FAIL CFG-0' "$work/vo.txt") -eq 1 ]]; }
+vo_refused() { [[ $VO_RC -ne 0 ]] && grep -q '^FAIL CFG-0' "$work/vo.txt"; }
+# (a) a real host: the container's VERIFY_CONTAINER=1 is what allows it
+vo_run VERIFY_CONTAINER=0 VERIFY_ONLY=NET-03
+yes_if "VERIFY_ONLY on a real host (VERIFY_CONTAINER is 0) is refused: FAIL CFG-02" vo_has '^FAIL CFG-02 VERIFY_ONLY is set'
+yes_if "VERIFY_ONLY on a real host is a non-zero exit with a CFG failure" vo_refused
+yes_if "VERIFY_ONLY on a real host runs no check at all (one FAIL line, no PASS, SKIP or WARN)" vo_no_check_ran
+yes_if "VERIFY_ONLY on a real host says what to do (unset it) and ends with a SUMMARY of one failure" bash -c "grep -q 'Unset it' '$work/vo.txt' && grep -qx 'SUMMARY pass=0 fail=1 warn=0 skip=0' '$work/vo.txt'"
+VO_RC=0
+env -u VERIFY_CONTAINER VERIFY_ONLY=NET-03 bash "$infra/verify.sh" >"$work/vo.txt" 2>&1 || VO_RC=$?
+yes_if "VERIFY_ONLY with VERIFY_CONTAINER not set at all is refused too" vo_has '^FAIL CFG-02 '
+# (b) every named check must exist
+vo_run VERIFY_ONLY=NET03
+yes_if "a mistyped check id (NET03) fails: FAIL CFG-03, naming it" vo_has "^FAIL CFG-03 .*NET03"
+yes_if "a mistyped check id is a non-zero exit with a CFG failure" vo_refused
+yes_if "a mistyped check id runs nothing (no PASS, SKIP or WARN, one FAIL)" vo_no_check_ran
+vo_run "VERIFY_ONLY=NET-03 NOPE-01"
+yes_if "one unknown id among good ones fails, naming the unknown one" vo_has "^FAIL CFG-03 .*NOPE-01"
+yes_if "... and the good one does not run either (a typo cannot be hidden by the others)" vo_no_check_ran
+# (c) a selection that selects nothing
+vo_run "VERIFY_ONLY= "
+yes_if "a selection with no id at all (spaces only) fails: FAIL CFG-03, names no check" vo_has '^FAIL CFG-03 VERIFY_ONLY names no check'
+yes_if "... and is a non-zero exit with a CFG failure" vo_refused
+vo_run "VERIFY_ONLY="
+yes_if "an empty VERIFY_ONLY (set, but empty) is also a selection of nothing, and fails" vo_has '^FAIL CFG-03 VERIFY_ONLY names no check'
+# (d) a subset says so
+vo_run "VERIFY_ONLY=NGX-01 NET-03"
+yes_if "a subset run prints a NOTE that only those checks ran (in the verifier's own order)" vo_has '^NOTE only ran: NET-03,NGX-01 '
+yes_if "a subset run puts only=<ids> on the SUMMARY line" vo_has '^SUMMARY pass=[0-9]+ fail=[0-9]+ warn=[0-9]+ skip=[0-9]+ only=NET-03,NGX-01$'
+yes_if "a subset run really ran just the two checks (two result lines)" bash -c "[[ \$(grep -cE '^(PASS|FAIL|WARN|SKIP) ' '$work/vo.txt') -eq 2 ]]"
+vo_run VERIFY_ONLY=CTR-04
+yes_if "one id works too: only=CTR-04" vo_has '^SUMMARY .* only=CTR-04$'
+# a normal run is a full one: no NOTE, no only=
+vo_run VERIFY_CONTAINER=1
+yes_if "a normal (full) run has no 'only=' on its SUMMARY line (and so cannot be mistaken for a subset)" bash -c "grep -q '^SUMMARY ' '$work/vo.txt' && ! grep -q 'only=' '$work/vo.txt' && ! grep -q 'NOTE only ran' '$work/vo.txt'"
+yes_if "a normal (full) run runs every check (34 checks, one result line each or more)" bash -c "[[ \$(grep -cE '^(PASS|FAIL|WARN|SKIP) ' '$work/vo.txt') -ge 34 ]]"
+
 # --- the generated podman command, checked flag by flag (unit tests on crafted commands) ---
 gen_line() { # ROLE: the real generated ExecStart= line for prod
   QUADLET_UNIT_DIRS=/home/oc-prod/.config/containers/systemd "$quadlet" -dryrun -user 2>/dev/null |

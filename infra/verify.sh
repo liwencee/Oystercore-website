@@ -15,8 +15,12 @@
 #                         checks marked (kernel) print SKIP.
 #   VERIFY_DEBUG=1        show the error output of the commands the checks run.
 #   VERIFY_ONLY="ID ..."  run only the checks with these ids (for example: VERIFY_ONLY="NET-03 NGX-01").
-#                         The tests use it to run one check after one deliberate change; a real
-#                         verification runs them all.
+#                         For the test container only, like VERIFY_CONTAINER=1: on a real host setting
+#                         it is refused (FAIL CFG-02), because a verification that quietly covers
+#                         fewer checks than it claims is worse than none. An id that is not a check
+#                         fails (FAIL CFG-03, naming it), so does a selection that names none, and a
+#                         subset run says so: "NOTE only ran: ..." and "only=..." on the SUMMARY line.
+#                         A real verification runs them all.
 set -uo pipefail
 export LC_ALL=C
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -2299,7 +2303,8 @@ run_check() {
 }
 
 main() {
-  local config=${OC_CONFIG:-$OC_INFRA_DIR/server.env} cfg_err entry
+  local config=${OC_CONFIG:-$OC_INFRA_DIR/server.env} cfg_err entry id known only="" ran=0
+  local -a only_ids=() only_run=()
   oc_require_root
   # VERIFY_CONTAINER=1 reads written configuration instead of live state. On a real host that
   # would quietly stop checking the firewall, the services and Podman, so it is refused there,
@@ -2310,6 +2315,37 @@ main() {
     printf 'SUMMARY pass=0 fail=1 warn=0 skip=0
 '
     exit 1
+  fi
+  # VERIFY_ONLY is honoured only where VERIFY_CONTAINER=1 is: a real host is verified in full, and a
+  # variable left exported in a shell must not make it pass with fewer checks than it claims.
+  if [[ -n ${VERIFY_ONLY+x} ]]; then
+    if ! in_container; then
+      printf 'FAIL CFG-02 VERIFY_ONLY is set but this is not the test container (VERIFY_CONTAINER is not 1). It would run fewer checks than the verifier has, so on a real server it is refused. Unset it and run verify.sh again.\n'
+      printf 'SUMMARY pass=0 fail=1 warn=0 skip=0\n'
+      exit 1
+    fi
+    read -r -a only_ids <<<"$VERIFY_ONLY"
+    if [[ ${#only_ids[@]} -eq 0 ]]; then
+      printf 'FAIL CFG-03 VERIFY_ONLY names no check (it is set, but empty): a selection of nothing would pass without checking anything. Unset it to run every check.\n'
+      printf 'SUMMARY pass=0 fail=1 warn=0 skip=0\n'
+      exit 1
+    fi
+    for id in "${only_ids[@]}"; do
+      known=0
+      for entry in "${CHECKS[@]}"; do
+        [[ ${entry%% *} == "$id" ]] && known=1
+      done
+      if ((!known)); then
+        printf 'FAIL CFG-03 VERIFY_ONLY names a check that does not exist: %s (a mistyped id would run nothing and pass)\n' "$id"
+        printf 'SUMMARY pass=0 fail=1 warn=0 skip=0\n'
+        exit 1
+      fi
+    done
+    # the checks that will run, in the verifier's own order
+    for entry in "${CHECKS[@]}"; do
+      word_in "${only_ids[*]}" "${entry%% *}" && only_run+=("${entry%% *}")
+    done
+    only=$(IFS=,; printf '%s' "${only_run[*]}")
   fi
   if ! cfg_err=$( (
     oc_load_config "$config"
@@ -2324,15 +2360,23 @@ main() {
   if in_container; then
     printf 'NOTE container mode: checks read the written configuration; (kernel) checks are skipped\n'
   fi
+  if [[ -n $only ]]; then
+    printf 'NOTE only ran: %s (VERIFY_ONLY is set: this is NOT a full verification)\n' "$only"
+  fi
   load_facts
   for entry in "${CHECKS[@]}"; do
-    # VERIFY_ONLY="ID ..." runs just those checks (the tests use it to run one check after one change).
-    if [[ -n ${VERIFY_ONLY:-} ]] && ! word_in "$VERIFY_ONLY" "${entry%% *}"; then
+    if [[ -n $only ]] && ! word_in "${only_ids[*]}" "${entry%% *}"; then
       continue
     fi
+    ran=$((ran + 1))
     run_check "${entry%% *}" "${entry#* }"
   done
-  printf 'SUMMARY pass=%d fail=%d warn=%d skip=%d\n' "$N_PASS" "$N_FAIL" "$N_WARN" "$N_SKIP"
+  # a verification that ran nothing has verified nothing
+  if ((ran == 0)); then
+    N_FAIL=$((N_FAIL + 1))
+    printf 'FAIL CFG-03 no check ran; a verification that checks nothing is a failure\n'
+  fi
+  printf 'SUMMARY pass=%d fail=%d warn=%d skip=%d%s\n' "$N_PASS" "$N_FAIL" "$N_WARN" "$N_SKIP" "${only:+ only=$only}"
   [[ $N_FAIL -eq 0 ]]
 }
 
