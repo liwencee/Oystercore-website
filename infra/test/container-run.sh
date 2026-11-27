@@ -1181,8 +1181,11 @@ vo_run() {
   VO_RC=0
   env "$@" bash "$infra/verify.sh" >"$work/vo.txt" 2>&1 || VO_RC=$?
 }
+# shellcheck disable=SC2317  # called through yes_if
 vo_has() { grep -qE -- "$1" "$work/vo.txt"; }
+# shellcheck disable=SC2317
 vo_no_check_ran() { [[ $(grep -cE '^(PASS|FAIL|WARN|SKIP) ' "$work/vo.txt") -eq 1 && $(grep -c '^FAIL CFG-0' "$work/vo.txt") -eq 1 ]]; }
+# shellcheck disable=SC2317
 vo_refused() { [[ $VO_RC -ne 0 ]] && grep -q '^FAIL CFG-0' "$work/vo.txt"; }
 # (a) a real host: the container's VERIFY_CONTAINER=1 is what allows it
 vo_run VERIFY_CONTAINER=0 VERIFY_ONLY=NET-03
