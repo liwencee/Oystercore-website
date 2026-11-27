@@ -181,6 +181,10 @@ fail() {
 }
 # indent: shows a block of output under its check, indented.
 indent() { sed 's/^/       | /'; }
+# To show only the first lines of a long list, pipe it through `sed -n '1,10p'`, never `head`: head
+# exits once it has its lines, the writer then dies of SIGPIPE when the list is longer than a pipe
+# holds, and with pipefail and errexit that ended the whole verifier (exit 141) before its other
+# checks had run.
 
 version_ge() { # version_ge A B: true when A >= B, both X.Y.Z
   local -a a b
@@ -243,7 +247,7 @@ check_no_shell() {
     # Entries that are not directories (a directory's entry ends in "/") named like a shell.
     found=$(grep -E '(^|/)(sh|bash|dash|ash|zsh|ksh|csh|tcsh|fish|busybox)$' "$work/list.txt" || true)
     if [[ -n $found ]]; then
-      fail no-shell "a shell is in the filesystem: $(printf '%s' "$found" | head -n 5 | tr '\n' ' ')"
+      fail no-shell "a shell is in the filesystem: $(printf '%s' "$found" | sed -n '1,5p' | tr '\n' ' ')"
       status_ok=0
     fi
   else
@@ -296,7 +300,7 @@ check_forbidden() {
     pass forbidden "none of .env*, .git, *.test.*, *.spec.*, .cache, __tests__, test, tests in $(wc -l <"$work/list.txt" | tr -d ' ') entries"
   else
     fail forbidden "$(printf '%s\n' "$found" | wc -l | tr -d ' ') forbidden entries, for example:"
-    printf '%s\n' "$found" | head -n 10 | indent
+    printf '%s\n' "$found" | sed -n '1,10p' | indent
   fi
 }
 check_forbidden
@@ -330,7 +334,7 @@ check_esbuild() {
     pass esbuild "no ELF binary among the $n files under an esbuild path"
   else
     fail esbuild "$(printf '%s' "$found" | wc -l | tr -d ' ') ELF binary(ies) under an esbuild path, for example:"
-    printf '%s' "$found" | head -n 10 | indent
+    printf '%s' "$found" | sed -n '1,10p' | indent
   fi
 }
 check_esbuild

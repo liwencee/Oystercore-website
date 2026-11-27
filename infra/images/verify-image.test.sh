@@ -307,6 +307,26 @@ for name in 'a/test/' 'b/__tests__/' 'c/tests/'; do
   if grep -qF "$name" <<<"$out"; then ok "forbidden lists $name"; else notok "forbidden does not list $name"; fi
 done
 
+# A list of forbidden files too long for a pipe (1500 entries of about 100 bytes, over the 64 KiB
+# a pipe holds) must be reported like a short one. The verifier shows only the first ten; with
+# `head` the writer died of SIGPIPE, and under pipefail and errexit the verifier ended with exit
+# 141 before it ran its other checks (found by running it on the real, unpruned CMS image).
+{
+  printf 'FROM %s AS plant\nUSER node\n' "$node_slim"
+  printf 'RUN mkdir -p /home/node/p/a-folder-with-a-name-long-enough-to-fill-a-pipe-buffer-quickly \\\n'
+  printf ' && cd /home/node/p/a-folder-with-a-name-long-enough-to-fill-a-pipe-buffer-quickly \\\n'
+  # shellcheck disable=SC2016  # the $ signs are the Dockerfile shell's, not this one's
+  printf ' && for i in $(seq 1 1500); do : > "a-file-with-a-long-name-for-the-sake-of-the-test-$i.test.js"; done\n'
+  printf 'FROM %s\nUSER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\n' "$distroless13"
+  printf 'COPY --from=plant /home/node/p /app/p\nCMD ["/app/server.mjs"]\n'
+} | build manyfiles
+run_verifier oc-verify-test-manyfiles:test web
+expect_exit 1
+expect_line 'FAIL forbidden'
+expect_text '1500 forbidden entries'
+expect_line 'RESULT: 1 check(s) failed'
+expect_line 'PASS keep-id'
+
 # (control) Names that only look like test folders are fine: folders called contest, latest and
 # testing, a file called test, and a file called tests.js. The same image carries the esbuild
 # look-alikes (below), so one run shows that neither check is too broad.
