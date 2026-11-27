@@ -1,0 +1,71 @@
+# Managed by infra/bootstrap.sh, rendered from infra/quadlet/oc-web.container.template into
+# the environment user's ~/.config/containers/systemd/. Do not edit by hand.
+# Podman's Quadlet generator turns it into the user service oc-web-@@ENV@@.
+#
+# The deploy script (infra/deploy/apply-release.sh) changes exactly one thing here: the Image=
+# line. The bootstrap keeps whatever tag is there when it is run again.
+[Unit]
+Description=OysterCore website (Astro), environment @@ENV@@
+
+[Container]
+ContainerName=oc-web-@@ENV@@
+Image=localhost/oc-web:bootstrap
+# Never pull. The image arrives in a tarball that the deploy script loads, so a missing tag must
+# fail the start, not make Podman look for it on a registry. Until the first deploy the tag
+# 'bootstrap' does not exist: the service fails at every boot until then, which is expected.
+Pull=never
+
+# Who the process is: the environment's own unprivileged host user, with the same ids inside.
+# Never root. (No GroupAdd: the website has no business with the ClamAV socket.)
+UserNS=keep-id
+User=@@UID@@
+Group=@@GID@@
+
+# The sandbox: a read-only root, no capabilities, no way to gain privileges, a small /tmp.
+ReadOnly=true
+DropCapability=ALL
+NoNewPrivileges=true
+Tmpfs=/tmp:rw,noexec,nosuid,size=64m
+
+# Limits, so one runaway app cannot starve the others (memory budget: about 0.3 GB each).
+# (Podman 4.9 has no Memory= key, so the memory limit goes in as an argument. Swap equal to the
+# limit means no swap.)
+PodmanArgs=--memory=512m --memory-swap=512m
+PidsLimit=256
+Environment=NODE_OPTIONS=--max-old-space-size=384
+
+# The website's own environment file (root:oc-@@ENV@@, mode 0640), never in the image or on a
+# command line. It holds only what the website needs; the CMS's secrets (database password,
+# JWT secrets, file master key) are in a different file that this container never sees.
+# These three repeat the file's values: inside the container the app listens on all
+# interfaces of its private network, and reaches the CMS by its container name there.
+EnvironmentFile=/etc/oc/@@ENV@@.web.env
+Environment=HOST=0.0.0.0
+Environment=PORT=@@INTERNAL_PORT@@
+Environment=OC_CMS_URL=http://oc-cms-@@ENV@@:@@CMS_INTERNAL_PORT@@
+
+# The private network of this environment (oc-@@ENV@@.network), and the one door out: the
+# app's port, published on this machine's loopback only. Nginx is the only way in.
+Network=oc-@@ENV@@.network
+PublishPort=127.0.0.1:@@HOST_PORT@@:@@INTERNAL_PORT@@
+
+# Public media only, read-only. The private store and the upload chunks are not visible
+# here at all. No socket of any kind is mounted.
+Volume=/var/lib/oc/@@ENV@@/media:/var/lib/oc/@@ENV@@/media:ro
+
+# A distroless image has no curl and no shell, so the image carries its own check, run
+# without a shell. The path is fixed by the image (Task 3b).
+HealthCmd=["/nodejs/bin/node","/app/healthcheck.mjs"]
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=60s
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

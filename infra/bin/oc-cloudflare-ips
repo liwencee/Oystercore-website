@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Refresh Cloudflare's published address ranges: the firewall rules for ports 80 and 443
+# and Nginx's trusted-proxy list. Run weekly by oc-cloudflare-ips.timer, and safe to run
+# by hand. Installed to /usr/local/sbin by infra/bootstrap.sh, with a copy of the libraries
+# in /usr/local/lib/oc.
+#
+# A bad download changes nothing: the lists are checked before anything is touched, new
+# firewall rules are added before stale ones are removed, and Nginx's old list is put back
+# if Nginx rejects the new one.
+set -euo pipefail
+export LC_ALL=C
+umask 022
+
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if [[ -f $here/../lib/common.sh ]]; then
+  lib="$here/../lib"
+else
+  lib=/usr/local/lib/oc
+fi
+# shellcheck source=../lib/common.sh
+source "$lib/common.sh"
+# shellcheck source=../lib/firewall.sh
+source "$lib/firewall.sh"
+# shellcheck source=../lib/nginx.sh
+source "$lib/nginx.sh"
+
+trap oc_cleanup EXIT
+oc_require_root
+
+fw_load_cloudflare_ips
+# The firewall first: if a new Cloudflare range appears, it must be let in before the
+# real-IP list mentions it.
+fw_sync_cloudflare
+nginx_update_realip
+oc_log "Cloudflare ranges are current: ${#FW_CF_V4[@]} IPv4 and ${#FW_CF_V6[@]} IPv6 ranges, $OC_CHANGES change(s)"

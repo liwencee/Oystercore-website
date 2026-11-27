@@ -1,0 +1,312 @@
+name: Deploy
+
+# A push to `staging` deploys to staging. A push to `main` deploys to production. Spec sections 5 and
+# 10.9. There is one deploy key PER ENVIRONMENT on the server, and each key's line there fixes its
+# environment (the forced command is `deploy-release prod` or `deploy-release staging`), so the
+# staging key can never deploy production, whatever a workflow asks for. What this file adds is that
+# each deploy job holds only its own environment's key:
+#
+#   build              no environment and no secret at all: installs, tests, builds both images, runs
+#                      the Task 3b checks on each, saves them to one gzip tarball and works out the
+#                      image ids Podman will report. Nothing in it can read a deploy key: GitHub gives
+#                      a job the secrets of an environment only when the job names that environment,
+#                      and this workflow names no repository secret.
+#   deploy-staging     `environment: staging`, only for a push to `staging`.
+#   deploy-production  `environment: production`, only for a push to `main`; waits for the manual
+#                      approval first.
+#
+# Each deploy job ssh-es to the server as the restricted deploy user with its environment's key and
+# sends "<commit> <cms id> <web id>" and the tarball; the environment is not in the command, because
+# the key fixes it.
+#
+# The server keeps no registry login. It loads the tarball itself, checks the ids against the ones
+# sent here, points the units at the new tag, restarts, waits for /_health and /healthz, and goes
+# back to the previous tag by itself if they do not come up (infra/deploy/apply-release.sh).
+#
+# What the owner sets up in GitHub (the bootstrap prints the same list), for EACH of the two
+# environments (Settings, Environments), never as repository secrets (a repository secret can be
+# read by a workflow on any branch):
+#   secrets  DEPLOY_SSH_KEY      the PRIVATE half of THAT environment's own key (public half:
+#                                OC_DEPLOY_PUBKEY_PROD or OC_DEPLOY_PUBKEY_STAGING on the server)
+#            DEPLOY_KNOWN_HOSTS  the server's host key line(s): ssh-keyscan -p <port> <host>
+#            DEPLOY_HOST         the server's address
+#            DEPLOY_SSH_PORT     the server's SSH port (OC_SSH_PORT)
+#   Deployment branches   production: only `main`. staging: only `staging`. Without this a workflow on
+#                         any other branch could name the environment and read its key.
+#   Required reviewers    on production (the manual approval).
+# The staging key still deploys images that run with the staging secrets, so `staging` needs the same
+# branch protection as `main`.
+
+on:
+  push:
+    branches:
+      - staging
+      - main
+
+permissions:
+  contents: read
+
+# One deploy at a time per environment. A deploy that is running is never cancelled: stopping
+# it halfway is worse than waiting.
+concurrency:
+  group: deploy-${{ github.ref_name == 'main' && 'production' || 'staging' }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build, test and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      cms_id: ${{ steps.ids.outputs.cms_id }}
+      web_id: ${{ steps.ids.outputs.web_id }}
+    services:
+      # The tests and the CMS image check both use it, on the same host port as docker-compose.dev.yml.
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: oc_ci_root
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      # Commit pins (full SHA, with the version in the comment) for every third-party action.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # A service container cannot mount repo files, so run the dev init script inside it
+      # (the same step as in ci.yml).
+      - name: Create databases
+        run: >-
+          docker exec -i "$(docker ps -q --filter ancestor=mariadb:11.4)"
+          mariadb -uroot -poc_ci_root < docker/initdb/01-databases.sql
+
+      - run: pnpm typecheck
+
+      - run: pnpm test
+
+      - run: pnpm build
+
+      # The images are built exactly as the images job of ci.yml builds them (Buildx, --load,
+      # --provenance=false: one plain image, with no attestation manifests beside it), and tagged
+      # with the commit, which is the tag the server's Quadlet files will name.
+      - name: Build the images
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          docker buildx version
+          docker buildx build --load --provenance=false --file apps/web/Dockerfile --tag "oc-web:$SHA" .
+          docker buildx build --load --provenance=false --file apps/cms/Dockerfile --tag "oc-cms:$SHA" .
+
+      - name: Verify the images (non-root, no shell, Node version, no forbidden files, size, read-only start)
+        env:
+          SHA: ${{ github.sha }}
+          # The MariaDB service's root password, above. The verifier makes a throwaway database
+          # and user for the cms and drops them again; the cms itself never sees this password.
+          OC_VERIFY_DB_PASSWORD: oc_ci_root
+        run: |
+          bash infra/images/verify-image.sh "oc-web:$SHA"
+          bash infra/images/verify-image.sh "oc-cms:$SHA"
+
+      # One tarball with both images. The ids are what `docker image inspect` prints for them;
+      # the server compares them with what Podman reports after loading. Podman reports an
+      # image's id as the digest of its config. Docker prints that digest too, unless it uses the
+      # containerd image store, where it prints the digest of the image's manifest or index
+      # instead; then the config digest is read from the tarball itself (manifest.json), which is
+      # what Podman will report. Either way the id sent is the one Podman will compute, and the
+      # step fails if the tarball does not hold exactly these two images.
+      - name: Save the images and work out their ids
+        id: ids
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker save "oc-cms:$SHA" "oc-web:$SHA" | gzip -c >images.tar.gz
+          ls -l images.tar.gz
+
+          config_id() { # TAG: the digest of the config of that image, from the tarball's manifest.json
+            tar -xzOf images.tar.gz manifest.json | jq -r --arg tag "$1" \
+              '[.[] | select((.RepoTags // []) | index($tag)) | .Config] | unique | if length == 1 then .[0] else empty end' |
+              sed -E 's#^(blobs/sha256/)?([0-9a-f]{64})(\.json)?$#sha256:\2#'
+          }
+          for app in cms web; do
+            docker_id=$(docker image inspect --format '{{.Id}}' "oc-$app:$SHA")
+            tar_id=$(config_id "oc-$app:$SHA")
+            [[ $tar_id =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::the tarball does not hold exactly one image tagged oc-$app:$SHA"; exit 1; }
+            if [[ $docker_id == "$tar_id" ]]; then
+              id=$docker_id
+            elif docker info --format '{{.DriverStatus}}' | grep -q 'io.containerd.snapshotter'; then
+              echo "docker prints $docker_id for oc-$app (its containerd image store uses the manifest digest); the config digest in the tarball, $tar_id, is what Podman reports, so that is the id sent"
+              id=$tar_id
+            else
+              echo "::error::docker image inspect says $docker_id for oc-$app:$SHA but the tarball's config digest is $tar_id, and Docker's classic image store should print them the same"
+              exit 1
+            fi
+            [[ $id =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad image id for oc-$app"; exit 1; }
+            echo "oc-$app:$SHA has the id $id"
+            echo "${app}_id=$id" >>"$GITHUB_OUTPUT"
+          done
+          # the tarball must hold only these two images (what the server will insist on)
+          n=$(tar -xzOf images.tar.gz manifest.json | jq -r '[.[].RepoTags[]?] | length')
+          [[ $n -eq 2 ]] || { echo "::error::the tarball holds $n image tags, not exactly 2"; exit 1; }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ github.sha }}
+          path: images.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+  # The two deploy jobs are the same steps with a different environment, and they are kept apart on
+  # purpose: each names ITS environment, so it can read only that environment's secrets (the staging
+  # key and the production key are different keys, and the server ties each to its environment).
+  deploy-staging:
+    name: Deploy to staging
+    needs: build
+    if: github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ github.sha }}
+
+      - name: Ship the images to staging over SSH
+        env:
+          # This environment's secrets only: the key of staging, which the server lets deploy staging only.
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          TARGET: staging
+          SHA: ${{ github.sha }}
+          CMS_ID: ${{ needs.build.outputs.cms_id }}
+          WEB_ID: ${{ needs.build.outputs.web_id }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # Nothing secret is printed: the values arrive in the environment (GitHub masks them in
+          # the log anyway) and are never part of a command line.
+          for name in DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS DEPLOY_HOST DEPLOY_SSH_PORT; do
+            [[ -n ${!name} ]] || { echo "::error::the secret $name is not set for the environment $TARGET"; exit 1; }
+          done
+          [[ $DEPLOY_SSH_PORT =~ ^[0-9]{1,5}$ ]] || { echo "::error::DEPLOY_SSH_PORT must be a number"; exit 1; }
+          [[ $DEPLOY_HOST =~ ^[A-Za-z0-9]([A-Za-z0-9.:-]*[A-Za-z0-9])?$ ]] || { echo "::error::DEPLOY_HOST is not a plain host name or address"; exit 1; }
+          [[ $SHA =~ ^[0-9a-f]{40}$ && $CMS_ID =~ ^sha256:[0-9a-f]{64}$ && $WEB_ID =~ ^sha256:[0-9a-f]{64}$ ]] ||
+            { echo "::error::the build job passed values of the wrong shape"; exit 1; }
+
+          # The key goes to a private temp file (0600, in a 0700 folder) that is deleted when this
+          # step ends, however it ends.
+          keydir=$(mktemp -d "$RUNNER_TEMP/deploy-ssh.XXXXXX")
+          trap 'rm -rf -- "$keydir"' EXIT
+          chmod 0700 "$keydir"
+          printf '%s\n' "$DEPLOY_SSH_KEY" >"$keydir/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >"$keydir/known_hosts"
+          chmod 0600 "$keydir/key" "$keydir/known_hosts"
+
+          # The command carries only the commit and the two image ids; the environment is not part of
+          # it (the server ties the key to its environment); the tarball is the input.
+          ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$keydir/known_hosts" \
+            -o GlobalKnownHostsFile=/dev/null \
+            -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes \
+            -o PasswordAuthentication=no -o ForwardAgent=no -o ForwardX11=no \
+            -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            -i "$keydir/key" -p "$DEPLOY_SSH_PORT" \
+            -- "oc-deploy@$DEPLOY_HOST" "$SHA $CMS_ID $WEB_ID" <images.tar.gz
+          echo "deployed $SHA to $TARGET"
+
+      # The step above removes the key file itself, by an EXIT trap. If that shell never got to run
+      # its trap (the runner killed it, the run was cancelled), this step still runs, and removes it.
+      - name: Remove the key file
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP"/deploy-ssh.*
+
+  deploy-production:
+    name: Deploy to production
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # waits here for the manual approval (the owner adds Required reviewers to this environment, and
+    # limits it to the main branch under Deployment branches)
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ github.sha }}
+
+      - name: Ship the images to production over SSH
+        env:
+          # This environment's secrets only: the key of production, which the server lets deploy production only.
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          TARGET: production
+          SHA: ${{ github.sha }}
+          CMS_ID: ${{ needs.build.outputs.cms_id }}
+          WEB_ID: ${{ needs.build.outputs.web_id }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # Nothing secret is printed: the values arrive in the environment (GitHub masks them in
+          # the log anyway) and are never part of a command line.
+          for name in DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS DEPLOY_HOST DEPLOY_SSH_PORT; do
+            [[ -n ${!name} ]] || { echo "::error::the secret $name is not set for the environment $TARGET"; exit 1; }
+          done
+          [[ $DEPLOY_SSH_PORT =~ ^[0-9]{1,5}$ ]] || { echo "::error::DEPLOY_SSH_PORT must be a number"; exit 1; }
+          [[ $DEPLOY_HOST =~ ^[A-Za-z0-9]([A-Za-z0-9.:-]*[A-Za-z0-9])?$ ]] || { echo "::error::DEPLOY_HOST is not a plain host name or address"; exit 1; }
+          [[ $SHA =~ ^[0-9a-f]{40}$ && $CMS_ID =~ ^sha256:[0-9a-f]{64}$ && $WEB_ID =~ ^sha256:[0-9a-f]{64}$ ]] ||
+            { echo "::error::the build job passed values of the wrong shape"; exit 1; }
+
+          # The key goes to a private temp file (0600, in a 0700 folder) that is deleted when this
+          # step ends, however it ends.
+          keydir=$(mktemp -d "$RUNNER_TEMP/deploy-ssh.XXXXXX")
+          trap 'rm -rf -- "$keydir"' EXIT
+          chmod 0700 "$keydir"
+          printf '%s\n' "$DEPLOY_SSH_KEY" >"$keydir/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >"$keydir/known_hosts"
+          chmod 0600 "$keydir/key" "$keydir/known_hosts"
+
+          # The command carries only the commit and the two image ids; the environment is not part of
+          # it (the server ties the key to its environment); the tarball is the input.
+          ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$keydir/known_hosts" \
+            -o GlobalKnownHostsFile=/dev/null \
+            -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes \
+            -o PasswordAuthentication=no -o ForwardAgent=no -o ForwardX11=no \
+            -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            -i "$keydir/key" -p "$DEPLOY_SSH_PORT" \
+            -- "oc-deploy@$DEPLOY_HOST" "$SHA $CMS_ID $WEB_ID" <images.tar.gz
+          echo "deployed $SHA to $TARGET"
+
+      # The step above removes the key file itself, by an EXIT trap. If that shell never got to run
+      # its trap (the runner killed it, the run was cancelled), this step still runs, and removes it.
+      - name: Remove the key file
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP"/deploy-ssh.*

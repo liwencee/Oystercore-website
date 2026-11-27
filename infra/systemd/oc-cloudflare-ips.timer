@@ -1,0 +1,12 @@
+# Managed by infra/bootstrap.sh.
+[Unit]
+Description=Refresh Cloudflare's address ranges every week
+
+[Timer]
+OnCalendar=weekly
+RandomizedDelaySec=2h
+Persistent=true
+Unit=oc-cloudflare-ips.service
+
+[Install]
+WantedBy=timers.target

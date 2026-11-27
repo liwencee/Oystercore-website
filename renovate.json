@@ -1,0 +1,34 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "docker:pinDigests",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "timezone": "Africa/Lagos",
+  "schedule": ["before 6am on monday"],
+  "labels": ["dependencies"],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "schedule": ["at any time"],
+    "groupName": null
+  },
+  "packageRules": [
+    {
+      "description": "One weekly pull request for all non-security updates (npm and pnpm, Dockerfile base images, GitHub Actions, the image tools in ci.yml). Security updates are never grouped: they are separate pull requests, raised at any time.",
+      "matchPackageNames": ["*"],
+      "groupName": "weekly updates"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Docker images that ci.yml runs as containers and pins as name@sha256:digest # version (hadolint, Trivy). The Dockerfile and GitHub Actions managers do not read these.",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": [
+        "(?<depName>[a-z0-9][a-z0-9./_-]*)@(?<currentDigest>sha256:[a-f0-9]{64}) # (?<currentValue>v?\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+# What may enter a Docker build context. Used by apps/web/Dockerfile and apps/cms/Dockerfile,
+# which build from the repository root. The aim: no secret, no local data and no git history
+# can reach an image, even by a careless COPY.
+#
+# Rules are read top to bottom and the last one that matches wins.
+
+# 1. Nothing enters unless it is listed in section 2.
+*
+
+# 2. The files the builds need.
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+!apps/web
+!apps/cms
+!packages/shared
+
+# 3. Even inside those folders, these never enter. Because they come last they beat section 2.
+# Real settings and keys (an .env.example is an example, and nothing builds from it).
+**/.env*
+**/*.pem
+**/*.key
+**/*.p12
+**/keys
+# Package-manager settings (an .npmrc or .yarnrc can hold a registry token), certificates and
+# bundles, private keys (id_rsa, id_ed25519, ...), secrets folders and encrypted files.
+**/.npmrc
+**/.yarnrc*
+**/*.pfx
+**/*.crt
+**/id_*
+**/secrets
+**/*.gpg
+**/*.age
+# Version control and the work files of this repository.
+**/.git
+**/.gitignore
+**/.gitattributes
+**/.superpowers
+# Installed and generated files: the build makes its own inside the image.
+**/node_modules
+**/dist
+**/build
+**/.astro
+**/.strapi
+**/.strapi-updater.json
+**/.tmp
+**/.cache
+**/*.tsbuildinfo
+# Tests and their output.
+**/*.test.*
+**/*.spec.*
+**/tests
+**/test-results
+**/playwright-report
+**/coverage
+# Local data: databases, dumps, backups, archives (a copy of something is as sensitive as the
+# thing), uploads, logs.
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+**/*.sql
+**/*.dump
+**/*.bak
+**/*.zip
+**/*.tar*
+**/*.log
+apps/cms/public/uploads
+apps/cms/exports
+**/.DS_Store
+**/Thumbs.db

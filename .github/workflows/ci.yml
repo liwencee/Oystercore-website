@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  # Every Monday, so that a newly published advisory is noticed even when no code changes
+  # (spec 10.9). This run changes nothing by itself: the base images and the dependencies are
+  # pinned (by digest and by lockfile), so it rebuilds the same bytes. What it does is re-scan:
+  # Trivy fails the images job when a vulnerability that has a fix is in a pinned base image,
+  # and `pnpm audit` fails the ci job for a new dependency advisory. Renovate (renovate.json)
+  # then opens the pull request that bumps the digest or the dependency, and the fix arrives
+  # only when a person merges it. The whole workflow runs, not only the images job; the infra
+  # job installs the current packages.
+  schedule:
+    - cron: '23 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # Same host port as docker-compose.dev.yml, so tests use one DB port everywhere.
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: oc_ci_root
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # gitleaks scans the whole history, not just the latest commit.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # A service container cannot mount repo files, so run the dev init script
+      # inside it. This creates oc_dev and oc_test, the same as docker-compose.dev.yml.
+      - name: Create databases
+        run: >-
+          docker exec -i "$(docker ps -q --filter ancestor=mariadb:11.4)"
+          mariadb -uroot -poc_ci_root < docker/initdb/01-databases.sql
+
+      - run: pnpm typecheck
+
+      - run: pnpm test
+
+      - run: pnpm build
+
+      # The two checks below still run if an earlier step failed, so one run reports everything.
+      - name: Audit dependencies
+        if: ${{ !cancelled() }}
+        run: pnpm audit --audit-level=high
+
+      - name: Scan for secrets (gitleaks)
+        if: ${{ !cancelled() }}
+        run: >-
+          docker run --rm -v "$GITHUB_WORKSPACE:/repo"
+          ghcr.io/gitleaks/gitleaks:v8.30.1 git --verbose --redact /repo
+
+  # The server setup scripts, proved in a throwaway Ubuntu 24.04 container: shellcheck,
+  # then bootstrap twice, verify, and check the second run changed nothing. It installs the
+  # real packages (MariaDB 11.4, Nginx, ClamAV, Podman), so it needs the internet. It also makes
+  # about two hundred deliberate breakages and checks that each one is noticed, and runs the
+  # deploy scripts' unit tests, so it takes about half an hour (hence the 60-minute limit). No
+  # secret is involved: the test generates its own keys and settings.
+  infra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the test image
+        run: docker build --tag oc-infra-test:local --file infra/test/Dockerfile infra
+
+      - name: shellcheck
+        run: bash infra/test/run.sh shellcheck
+
+      - name: Bootstrap, verify and idempotence
+        run: bash infra/test/run.sh
+
+  # The app images: minimal and non-root by test, not by promise (spec 10.9). Every step below
+  # fails the job. The cms image is started against the MariaDB service, so this job has its own.
+  # Third-party tools run as containers pinned by digest (hadolint, Trivy) and the build uses
+  # the Buildx that GitHub's runner already has, so the only action here is checkout, pinned to
+  # a full commit SHA (v7.0.1).
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      # Same host port as docker-compose.dev.yml. The verifier reaches it as host.docker.internal:3307.
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: oc_ci_root
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      HADOLINT: hadolint/hadolint@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e # v2.14.0
+      TRIVY: aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb # 0.76.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # DL3002 (the last USER must not be root) is an error here, on top of hadolint's defaults.
+      - name: Lint the Dockerfiles (hadolint)
+        run: |
+          for dockerfile in apps/web/Dockerfile apps/cms/Dockerfile; do
+            echo "::group::hadolint $dockerfile"
+            docker run --rm -i "$HADOLINT" hadolint --error DL3002 --failure-threshold info - < "$dockerfile"
+            echo "::endgroup::"
+          done
+
+      # hadolint only looks at the last USER of a file. This looks at every stage: each must
+      # set a non-root USER before its first RUN. Its own test runs first.
+      - name: Every stage runs as non-root before its first RUN
+        run: |
+          bash infra/images/check-dockerfile-users.test.sh
+          bash infra/images/check-dockerfile-users.sh apps/web/Dockerfile apps/cms/Dockerfile
+
+      # No .env, key, database or git history can enter a build, even by a careless COPY.
+      - name: Test .dockerignore
+        run: bash infra/images/dockerignore.test.sh
+
+      # --provenance=false: a plain single-image result, with no attestation manifests beside it,
+      # which is what Task 4 will save and load on the server.
+      - name: Build the images (Buildx)
+        run: |
+          docker buildx version
+          docker buildx build --load --provenance=false --file apps/web/Dockerfile --tag oc-web:ci .
+          docker buildx build --load --provenance=false --file apps/cms/Dockerfile --tag oc-cms:ci .
+
+      # The verifier is tested first, on images that are right and wrong in known ways.
+      - name: Test the image verifier
+        run: bash infra/images/verify-image.test.sh
+
+      - name: Verify the images (non-root, no shell, Node version, no forbidden files, size, read-only start)
+        env:
+          # The MariaDB service's root password, above. The verifier makes a throwaway database
+          # and user for the cms and drops them again; the cms itself never sees this password.
+          OC_VERIFY_DB_PASSWORD: oc_ci_root
+        run: |
+          bash infra/images/verify-image.sh oc-web:ci
+          bash infra/images/verify-image.sh oc-cms:ci
+
+      # HIGH and CRITICAL findings that have a fix fail the job. .trivyignore lists the few
+      # temporary exceptions, each by exact id with its reason. The images go in as tarballs,
+      # so no container gets the Docker socket.
+      - name: Scan the images (Trivy)
+        run: |
+          mkdir -p trivy-work
+          for app in web cms; do
+            docker save "oc-$app:ci" --output "trivy-work/oc-$app.tar"
+            echo "::group::trivy oc-$app"
+            docker run --rm \
+              --volume "$PWD/trivy-work:/work:ro" \
+              --volume "$PWD/.trivyignore:/.trivyignore:ro" \
+              "$TRIVY" image \
+              --input "/work/oc-$app.tar" \
+              --ignorefile /.trivyignore \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --exit-code 1
+            echo "::endgroup::"
+          done
+
+  # The workflows themselves, checked before they ever run (actionlint, which also runs shellcheck
+  # on every `run:` script). It covers ci.yml and deploy.yml; deploy.yml is the one that holds
+  # the deploy key, so a typo in it is checked here and not discovered at a deploy. Like the other
+  # tools it runs as a container pinned by digest, so the only action here is checkout.
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ACTIONLINT: rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # v1.7.12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Lint the workflows (actionlint)
+        run: >-
+          docker run --rm --volume "$PWD:/repo:ro" --workdir /repo "$ACTIONLINT"
+          -color .github/workflows/ci.yml .github/workflows/deploy.yml

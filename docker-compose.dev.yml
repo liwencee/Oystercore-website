@@ -1,0 +1,23 @@
+# Local MariaDB for development and tests.
+# Host port 3307 avoids a MariaDB already installed on the machine at 3306.
+# Databases: oc_dev (development) and oc_test (tests), created by docker/initdb.
+# The initdb scripts run only on an empty volume. To start again from scratch:
+#   docker compose -f docker-compose.dev.yml down -v
+services:
+  db:
+    image: mariadb:11.4
+    ports:
+      - "127.0.0.1:3307:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: oc_dev_root
+    volumes:
+      - oc-db-data:/var/lib/mysql
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  oc-db-data:
