@@ -6,11 +6,13 @@ on:
   # Every Monday, so that a newly published advisory is noticed even when no code changes
   # (spec 10.9). This run changes nothing by itself: the base images and the dependencies are
   # pinned (by digest and by lockfile), so it rebuilds the same bytes. What it does is re-scan:
-  # Trivy fails the images job when a vulnerability that has a fix is in a pinned base image,
-  # and `pnpm audit` fails the ci job for a new dependency advisory. Renovate (renovate.json)
-  # then opens the pull request that bumps the digest or the dependency, and the fix arrives
-  # only when a person merges it. The whole workflow runs, not only the images job; the infra
-  # job installs the current packages.
+  # Trivy scans the final images (the distroless base and the app layers on top of it, not the
+  # build stage, which is thrown away) and fails the images job when it finds a HIGH or CRITICAL
+  # vulnerability that has a fix, and `pnpm audit` fails the ci job for a new dependency
+  # advisory. Once the Renovate GitHub app is installed on the repository, Renovate
+  # (renovate.json) opens the pull request that bumps the digest or the dependency; until then a
+  # person makes the bump by hand. Either way the fix arrives only when a person merges it. The
+  # whole workflow runs, not only the images job; the infra job installs the current packages.
   schedule:
     - cron: '23 4 * * 1'
 
@@ -23,8 +25,11 @@ jobs:
     timeout-minutes: 20
     services:
       # Same host port as docker-compose.dev.yml, so tests use one DB port everywhere.
+      # Pinned by digest (the multi-arch index of mariadb:11.4, MariaDB 11.4.13), so a re-tagged
+      # image cannot change what CI tests against; Renovate bumps it. The same digest is the
+      # verifier's client image in infra/images/verify-image.sh.
       mariadb:
-        image: mariadb:11.4
+        image: mariadb:11.4@sha256:a8992b5e5404d11e03c54a31d0c1bdea3fd116d283aa6d1a627551f29045309b
         env:
           MARIADB_ROOT_PASSWORD: oc_ci_root
         ports:
@@ -39,6 +44,9 @@ jobs:
         with:
           # gitleaks scans the whole history, not just the latest commit.
           fetch-depth: 0
+          # Nothing later in this job pushes or fetches from GitHub, and it runs the project's
+          # install scripts and build, so the repository token is not left in .git/config.
+          persist-credentials: false
 
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
@@ -51,9 +59,13 @@ jobs:
 
       # A service container cannot mount repo files, so run the dev init script
       # inside it. This creates oc_dev and oc_test, the same as docker-compose.dev.yml.
+      # The container is found by the id GitHub gives the service, not by its image name:
+      # the name now carries a digest, which Renovate changes in one place only.
       - name: Create databases
+        env:
+          MARIADB_CONTAINER: ${{ job.services.mariadb.id }}
         run: >-
-          docker exec -i "$(docker ps -q --filter ancestor=mariadb:11.4)"
+          docker exec -i "$MARIADB_CONTAINER"
           mariadb -uroot -poc_ci_root < docker/initdb/01-databases.sql
 
       - run: pnpm typecheck
@@ -84,6 +96,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Build the test image
         run: docker build --tag oc-infra-test:local --file infra/test/Dockerfile infra
@@ -104,8 +118,9 @@ jobs:
     timeout-minutes: 45
     services:
       # Same host port as docker-compose.dev.yml. The verifier reaches it as host.docker.internal:3307.
+      # Pinned by digest, the same one as in the ci job and in infra/images/verify-image.sh.
       mariadb:
-        image: mariadb:11.4
+        image: mariadb:11.4@sha256:a8992b5e5404d11e03c54a31d0c1bdea3fd116d283aa6d1a627551f29045309b
         env:
           MARIADB_ROOT_PASSWORD: oc_ci_root
         ports:
@@ -120,6 +135,8 @@ jobs:
       TRIVY: aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb # 0.76.2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # DL3002 (the last USER must not be root) is an error here, on top of hadolint's defaults.
       - name: Lint the Dockerfiles (hadolint)
@@ -141,6 +158,12 @@ jobs:
       - name: Test .dockerignore
         run: bash infra/images/dockerignore.test.sh
 
+      # The settings around the images: no checkout leaves git credentials behind, the Trivy
+      # options, the MariaDB pins, the expiry dates in .trivyignore.yaml, renovate.json, the
+      # pnpm hash and the comments that say how a security fix arrives. No Docker needed.
+      - name: Check the CI, Renovate and package-manager settings
+        run: bash infra/images/ci-config.test.sh
+
       # --provenance=false: a plain single-image result, with no attestation manifests beside it,
       # which is what Task 4 will save and load on the server.
       - name: Build the images (Buildx)
@@ -153,7 +176,7 @@ jobs:
       - name: Test the image verifier
         run: bash infra/images/verify-image.test.sh
 
-      - name: Verify the images (non-root, no shell, Node version, no forbidden files, size, read-only start)
+      - name: Verify the images (non-root, no shell, Node version, no forbidden files, no esbuild binary, size, read-only start)
         env:
           # The MariaDB service's root password, above. The verifier makes a throwaway database
           # and user for the cms and drops them again; the cms itself never sees this password.
@@ -162,21 +185,27 @@ jobs:
           bash infra/images/verify-image.sh oc-web:ci
           bash infra/images/verify-image.sh oc-cms:ci
 
-      # HIGH and CRITICAL findings that have a fix fail the job. .trivyignore lists the few
-      # temporary exceptions, each by exact id with its reason. The images go in as tarballs,
-      # so no container gets the Docker socket.
+      # HIGH and CRITICAL findings that have a fix fail the job. .trivyignore.yaml lists the few
+      # temporary exceptions, each by exact id with its reason and an expiry date (after that date
+      # Trivy no longer ignores it, so it cannot stay for good). The images go in as tarballs, so
+      # no container gets the Docker socket. Both scans share one cache folder, so the
+      # vulnerability database is downloaded once, and each has 15 minutes (the default is 5,
+      # which the first download and the larger image can use up).
       - name: Scan the images (Trivy)
         run: |
-          mkdir -p trivy-work
+          mkdir -p trivy-work trivy-cache
           for app in web cms; do
             docker save "oc-$app:ci" --output "trivy-work/oc-$app.tar"
             echo "::group::trivy oc-$app"
             docker run --rm \
               --volume "$PWD/trivy-work:/work:ro" \
-              --volume "$PWD/.trivyignore:/.trivyignore:ro" \
+              --volume "$PWD/trivy-cache:/cache" \
+              --volume "$PWD/.trivyignore.yaml:/.trivyignore.yaml:ro" \
               "$TRIVY" image \
+              --cache-dir /cache \
+              --timeout 15m \
               --input "/work/oc-$app.tar" \
-              --ignorefile /.trivyignore \
+              --ignorefile /.trivyignore.yaml \
               --severity HIGH,CRITICAL \
               --ignore-unfixed \
               --exit-code 1
@@ -194,6 +223,8 @@ jobs:
       ACTIONLINT: rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # v1.7.12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Lint the workflows (actionlint)
         run: >-

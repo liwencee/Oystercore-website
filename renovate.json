@@ -8,15 +8,18 @@
   "timezone": "Africa/Lagos",
   "schedule": ["before 6am on monday"],
   "labels": ["dependencies"],
+  "minimumReleaseAge": "3 days",
   "vulnerabilityAlerts": {
     "enabled": true,
     "schedule": ["at any time"],
-    "groupName": null
+    "groupName": null,
+    "minimumReleaseAge": null
   },
   "packageRules": [
     {
-      "description": "One weekly pull request for all non-security updates (npm and pnpm, Dockerfile base images, GitHub Actions, the image tools in ci.yml). Security updates are never grouped: they are separate pull requests, raised at any time.",
+      "description": "One weekly pull request for the minor, patch, digest and pin updates of everything (npm and pnpm, Dockerfile base images, GitHub Actions, the image tools and the MariaDB image in ci.yml and verify-image.sh). A major update is NOT in it: it gets a pull request of its own, so a breaking change is reviewed alone and cannot hold up the weekly one. Security updates are never grouped: they are separate pull requests, raised at any time.",
       "matchPackageNames": ["*"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
       "groupName": "weekly updates"
     }
   ],
@@ -27,6 +30,15 @@
       "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
       "matchStrings": [
         "(?<depName>[a-z0-9][a-z0-9./_-]*)@(?<currentDigest>sha256:[a-f0-9]{64}) # (?<currentValue>v?\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "The MariaDB image that infra/images/verify-image.sh runs as its database client, pinned as name:tag@sha256:digest. It is the same image as the MariaDB service in ci.yml (which Renovate reads by itself), so both are bumped in the same weekly pull request.",
+      "managerFilePatterns": ["/^infra/images/verify-image\\.sh$/"],
+      "matchStrings": [
+        "db_client_image='(?<depName>[a-z0-9][a-z0-9./_-]*):(?<currentValue>[A-Za-z0-9._-]+)@(?<currentDigest>sha256:[a-f0-9]{64})'"
       ],
       "datasourceTemplate": "docker"
     }
