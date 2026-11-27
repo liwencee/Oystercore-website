@@ -18,23 +18,31 @@
 #   2. reads the two Quadlet files' current Image= lines (exit 7 if they are not as the
 #      bootstrap wrote them);
 #   3. loads the tarball with Podman, as the environment's user (exit 6 if it cannot be loaded);
+#      The spool file is opened by a small helper with O_NOFOLLOW and O_NONBLOCK (a link, or a
+#      named pipe put there in the meantime, is refused, not followed or waited for), and the
+#      unpacking (gzip) runs as the environment's user too;
 #   4. checks that the image ids Podman now holds are the ids CI sent, and that the tarball
-#      brought in nothing else; if not, it undoes the load and stops (exit 3, nothing changed);
+#      brought in nothing else (no other name, and no image without a name either); if not, it
+#      undoes the load and stops (exit 3, nothing changed);
 #   5. rewrites ONLY the Image= line of oc-cms-<env>.container and oc-web-<env>.container,
 #      regenerates the units (daemon-reload) and restarts both services;
-#   6. waits up to 60 s for the CMS /_health and the web /healthz on localhost;
+#   6. waits up to 60 s for the CMS /_health and the web /healthz on localhost, and for the
+#      RUNNING containers to be made from the new images (a service that answers is not enough:
+#      the old container could still be the one answering);
 #   7. on any failure after step 5 it puts the previous Image= lines back and restarts those
-#      (or, if there is no previous release to go back to, stops both services) and exits 1;
+#      (or, if there is no previous release to go back to, or the two Image= lines cannot both be
+#      put back, stops both services: a mixed pair is never started) and exits 1;
 #   8. on success it keeps the 3 newest release tags of each image and removes older ones.
 #
 # Exit status: 0 done, 1 health check failed (rolled back) or another error after the change,
 # 2 bad arguments, 3 image ids do not match or the tarball held other images (nothing
 # changed), 4 another deploy is running, 5 spool file refused, 6 tarball could not be loaded,
-# 7 Quadlet files are not as expected. 2, 3, 4, 5, 6 and 7 leave the server as it was.
+# 7 the server is not set up as expected (the Quadlet files are not as the bootstrap wrote them, or
+# the environment's user does not exist). 2, 3, 4, 5, 6 and 7 leave the server as it was.
 #
 # Test overrides (ignored whenever sudo started the script, so a caller cannot use them):
 #   OC_ROOT           prefix for every path (a fake tree)
-#   OC_PODMAN, OC_SYSTEMCTL, OC_CURL, OC_RUNUSER   the programs to run instead of the real ones
+#   OC_PODMAN, OC_SYSTEMCTL, OC_CURL, OC_RUNUSER, OC_GZIP, OC_PERL   the programs to run instead of the real ones
 #   OC_DEPLOY_USER    the user that must own the spool file (default oc-deploy)
 #   OC_ENV_UID        the environment user's numeric id (default: looked up)
 #   OC_HEALTH_TIMEOUT, OC_HEALTH_INTERVAL   seconds (default 60 and 2)
@@ -87,11 +95,14 @@ HAVE_LOCK=0
 SPOOL_DIR_OK=0
 SPOOL_ID=
 declare -A BEFORE=()
+declare -A BEFORE_IDS=()
+EXPECT_CMS_ID=
+EXPECT_WEB_ID=
 
 # --- settings ---------------------------------------------------------------------------
 setup() {
   if [[ -n ${SUDO_USER:-}${SUDO_UID:-}${SUDO_COMMAND:-} ]]; then
-    unset OC_ROOT OC_PODMAN OC_SYSTEMCTL OC_CURL OC_RUNUSER OC_DEPLOY_USER OC_ENV_UID \
+    unset OC_ROOT OC_PODMAN OC_SYSTEMCTL OC_CURL OC_RUNUSER OC_GZIP OC_PERL OC_DEPLOY_USER OC_ENV_UID \
       OC_HEALTH_TIMEOUT OC_HEALTH_INTERVAL OC_MAX_TARBALL_BYTES
   fi
   ROOT=${OC_ROOT:-}
@@ -99,6 +110,8 @@ setup() {
   SYSTEMCTL=${OC_SYSTEMCTL:-/usr/bin/systemctl}
   CURL=${OC_CURL:-/usr/bin/curl}
   RUNUSER=${OC_RUNUSER:-/usr/sbin/runuser}
+  GZIP=${OC_GZIP:-/usr/bin/gzip}
+  PERL=${OC_PERL:-/usr/bin/perl}
   DEPLOY_USER=${OC_DEPLOY_USER:-oc-deploy}
   HEALTH_TIMEOUT=60
   [[ ${OC_HEALTH_TIMEOUT:-} =~ ^[0-9]{1,4}$ ]] && HEALTH_TIMEOUT=$OC_HEALTH_TIMEOUT
@@ -134,23 +147,28 @@ setup() {
   if [[ -n ${OC_ENV_UID:-} ]]; then
     ENV_UID=$OC_ENV_UID
   else
-    ENV_UID=$(id -u -- "oc-$ENV_NAME" 2>/dev/null) || die 1 "the user oc-$ENV_NAME does not exist"
+    ENV_UID=$(id -u -- "oc-$ENV_NAME" 2>/dev/null) || die 7 "the user oc-$ENV_NAME does not exist (has the bootstrap run for $ENV_NAME?); nothing was changed"
   fi
-  [[ $ENV_UID =~ ^[0-9]+$ ]] || die 1 "bad user id for oc-$ENV_NAME"
+  [[ $ENV_UID =~ ^[0-9]+$ ]] || die 7 "bad user id for oc-$ENV_NAME; nothing was changed"
 }
 
 # --- running things as the environment's user --------------------------------------------
-# A clean environment of its own: nothing from the caller (not even sudo's variables) goes in.
+# A clean environment of its own: nothing from the caller (not even sudo's variables) goes in, and
+# no descriptor either. Descriptor 7 holds the deploy lock (a flock belongs to the open file, so
+# every copy of the descriptor holds it): rootless Podman leaves a long-lived "pause" process
+# behind, and one that inherited descriptor 7 would keep every later deploy out (exit 4) for as
+# long as it lives. Every child therefore starts with 7 closed (7>&-). (The spool file used to be
+# held on descriptor 9; it is opened by the helper below, so there is no 9 to close any more.)
 env_run() { # PROGRAM ARGS...
   "$RUNUSER" -u "oc-$ENV_NAME" -- env -i "PATH=$SAFE_PATH" "LC_ALL=C" "HOME=$ENV_HOME" \
-    "XDG_RUNTIME_DIR=/run/user/$ENV_UID" "$@"
+    "XDG_RUNTIME_DIR=/run/user/$ENV_UID" "$@" 7>&-
 }
 podman_run() { env_run "$PODMAN" "$@"; }
 # A lingering user's own systemd manager, reached through its bus socket in /run/user/<uid>
 # (the same way lib/containers.sh talks to it).
 systemctl_user() { env_run "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$ENV_UID/bus" "$SYSTEMCTL" --user "$@"; }
 # File work on the environment's files, as that user.
-as_env() { "$RUNUSER" -u "oc-$ENV_NAME" -- env -i "PATH=$SAFE_PATH" "LC_ALL=C" "$@"; }
+as_env() { "$RUNUSER" -u "oc-$ENV_NAME" -- env -i "PATH=$SAFE_PATH" "LC_ALL=C" "$@" 7>&-; }
 
 # --- the Quadlet files ------------------------------------------------------------------
 qfile() { printf '%s/oc-%s-%s.container' "$QDIR" "$1" "$ENV_NAME"; }
@@ -201,10 +219,25 @@ fill_names() {
   done <<<"$listing"
 }
 
-# Undo a load: remove every name that did not exist before, and put back every name that the
-# tarball moved to another image. Safe to run at any point after BEFORE was filled.
+# fill_ids LISTING NAME-OF-ASSOC-ARRAY: every image id in the listing (bare hex), named or not.
+fill_ids() {
+  local listing=$1 id created name
+  # shellcheck disable=SC2178  # into is a nameref to the caller's array
+  local -n into=$2
+  into=()
+  while IFS='|' read -r id created name; do
+    [[ -n $id ]] || continue
+    # shellcheck disable=SC2034,SC2004  # into is a nameref to the caller's array
+    into[$(norm_id "$id")]=1
+  done <<<"$listing"
+}
+
+# Undo a load: remove every name that did not exist before, put back every name that the tarball
+# moved to another image, and remove every image that has no name and was not here before (a
+# tarball can bring those in too, and moving a name back leaves the image that held it without
+# one). Safe to run at any point after BEFORE and BEFORE_IDS were filled.
 undo_load() {
-  local listing name oldid
+  local listing name oldid id created
   local -A now=()
   listing=$(list_images 2>/dev/null) || {
     say "WARNING: could not list images to undo the load"
@@ -219,22 +252,63 @@ undo_load() {
       podman_run tag -- "$oldid" "$name" >/dev/null 2>&1 || say "WARNING: could not put $name back on its old image"
     fi
   done
+  listing=$(list_images 2>/dev/null) || {
+    say "WARNING: could not list images to remove the untagged ones the load added"
+    return 0
+  }
+  while IFS='|' read -r id created name; do
+    [[ -n $id && $name == *'<none>'* ]] || continue
+    id=$(norm_id "$id")
+    [[ -z ${BEFORE_IDS[$id]+x} ]] || continue
+    podman_run rmi -- "$id" >/dev/null 2>&1 || say "WARNING: could not remove the untagged image $id"
+  done <<<"$listing"
 }
 
 # --- health -----------------------------------------------------------------------------
+# running_image APP: the id (bare hex) of the image the RUNNING container oc-<app>-<env> was made from.
+# (podman container inspect --format {{.ImageID}}: the id, not the name; checked against Podman 4.9.3.)
+running_image() {
+  local id
+  id=$(podman_run container inspect --format '{{.ImageID}}' "oc-$1-$ENV_NAME" 2>/dev/null) || return 1
+  id=$(norm_id "${id%%$'\n'*}")
+  [[ $id =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$id"
+}
+# images_current: each running container was made from the image the release says it should be (the
+# ids in EXPECT_CMS_ID and EXPECT_WEB_ID; an empty one is not checked). A service that answers its
+# health check could still be the OLD container, if the restart did not replace it.
+images_current() {
+  local app want got
+  for app in cms web; do
+    want=EXPECT_${app^^}_ID
+    want=${!want}
+    [[ -n $want ]] || continue
+    got=$(running_image "$app") || return 1
+    [[ $got == "$want" ]] || return 1
+  done
+}
 health_once() {
   "$CURL" -fsS --noproxy '*' --max-time 3 -o /dev/null "http://127.0.0.1:$CMS_PORT/_health" >/dev/null 2>&1 &&
     "$CURL" -fsS --noproxy '*' --max-time 3 -o /dev/null "http://127.0.0.1:$WEB_PORT/healthz" >/dev/null 2>&1 &&
     systemctl_user is-active --quiet "oc-cms-$ENV_NAME.service" >/dev/null 2>&1 &&
-    systemctl_user is-active --quiet "oc-web-$ENV_NAME.service" >/dev/null 2>&1
+    systemctl_user is-active --quiet "oc-web-$ENV_NAME.service" >/dev/null 2>&1 &&
+    images_current
 }
 wait_healthy() {
-  local deadline=$((SECONDS + HEALTH_TIMEOUT))
+  local deadline=$((SECONDS + HEALTH_TIMEOUT)) app got want
   while :; do
     health_once && return 0
-    ((SECONDS >= deadline)) && return 1
+    ((SECONDS >= deadline)) && break
     sleep "$HEALTH_INTERVAL"
   done
+  # say why, if the services answered but the containers are not the ones expected
+  for app in cms web; do
+    want=EXPECT_${app^^}_ID
+    [[ -n ${!want} ]] || continue
+    got=$(running_image "$app") || got="(no running container)"
+    [[ $got == "${!want}" ]] || say "the running oc-$app container is made from $got, not from the expected image ${!want}"
+  done
+  return 1
 }
 
 restart_both() {
@@ -243,19 +317,29 @@ restart_both() {
 
 # --- rollback ---------------------------------------------------------------------------
 rollback() {
-  local app cur prev_var
+  local app cur prev_var restored=1
   say "the new release failed; rolling back"
   for app in cms web; do
     prev_var=PREV_${app^^}
     cur=$(read_image "$app" 2>/dev/null) || cur=""
     if [[ $cur != "${!prev_var}" ]]; then
       set_image "$app" "${!prev_var}" || say "WARNING: could not put the Image= line of oc-$app back"
+      cur=$(read_image "$app" 2>/dev/null) || cur=""
+      [[ $cur == "${!prev_var}" ]] || restored=0
     fi
   done
   systemctl_user daemon-reload || say "WARNING: daemon-reload failed during the rollback"
-  if [[ $PREV_EXISTS == 1 ]]; then
+  if [[ $restored == 0 ]]; then
+    # One file is back and the other is not: restarting would run the CMS of one release with the
+    # website of another. Neither is started; both are stopped, and the owner is told.
+    systemctl_user stop "oc-cms-$ENV_NAME.service" "oc-web-$ENV_NAME.service" ||
+      say "WARNING: could not stop the services"
+    say "WARNING: the two Image= lines could not both be put back, so the services are left stopped (never a mixed pair). Look at $(qfile cms) and $(qfile web), then restart them by hand."
+  elif [[ $PREV_EXISTS == 1 ]]; then
     systemctl_user restart "oc-cms-$ENV_NAME.service" "oc-web-$ENV_NAME.service" ||
       say "WARNING: restarting the previous release failed"
+    EXPECT_CMS_ID=$PREV_CMS_ID
+    EXPECT_WEB_ID=$PREV_WEB_ID
     if wait_healthy; then
       say "rolled back: the previous release ($PREV_CMS, $PREV_WEB) is running and healthy again"
     else
@@ -295,28 +379,85 @@ on_exit() {
 }
 
 # --- the spool file ---------------------------------------------------------------------
-# open_spool: refuse anything but a plain, single-link, non-empty regular file owned by the
-# deploy user and not over the limit; then keep it open on file descriptor 9. Everything
-# later reads from that descriptor, so replacing the file after this point changes nothing,
-# and the descriptor is checked against the path so a swap in between is noticed.
+# The spool file is a path in a folder the deploy user can write, so it can be swapped for something
+# else at any moment. Bash cannot open a file with O_NOFOLLOW (a link is not followed) and O_NONBLOCK
+# (a named pipe does not make open wait for ever), so a small perl program opens it: with both flags,
+# and looks at what it opened (fstat on the descriptor it holds, so there is no gap between the look
+# and the use). It runs twice: once to say what the file is, and once to stream it (at most MAX
+# bytes) into the unpacking, where it opens the file again and refuses anything but the very file
+# the first run described (same device and inode), a regular file owned by the deploy user.
+# shellcheck disable=SC2016  # a perl program: the $ signs are perl's, not the shell's
+SPOOL_PERL='
+use strict; use warnings;
+use Fcntl qw(O_RDONLY O_NOFOLLOW O_NONBLOCK :mode);
+my ($mode, $path, $max, $want_id, $want_uid) = @ARGV;
+sysopen(my $fh, $path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) or do { print STDERR "spool: cannot open $path safely: $!\n"; exit 20 };
+my @st = stat($fh) or do { print STDERR "spool: cannot look at the open file: $!\n"; exit 21 };
+my $id = "$st[0]:$st[1]";
+if ($mode eq "facts") {
+  printf "%s|%s|%d|%d|%d\n", $id, (S_ISREG($st[2]) ? "regular" : "other"), $st[4], $st[3], $st[7];
+  exit 0;
+}
+if (!S_ISREG($st[2])) { print STDERR "spool: not a regular file\n"; exit 22 }
+if ($id ne $want_id) { print STDERR "spool: the file was replaced after it was checked\n"; exit 23 }
+if ($st[4] != $want_uid || $st[3] != 1) { print STDERR "spool: the owner or the number of links changed after the check\n"; exit 24 }
+binmode(STDOUT);
+my $left = $max;
+while ($left > 0) {
+  my $buf;
+  my $n = sysread($fh, $buf, $left < 65536 ? $left : 65536);
+  if (!defined $n) { print STDERR "spool: read failed: $!\n"; exit 25 }
+  last if $n == 0;
+  my $off = 0;
+  while ($off < $n) {
+    my $w = syswrite(STDOUT, $buf, $n - $off, $off);
+    if (!defined $w) { print STDERR "spool: write failed: $!\n"; exit 26 }
+    $off += $w;
+  }
+  $left -= $n;
+}
+exit 0;
+'
+# spool_perl MODE ARGS...: the helper, with descriptor 7 (the lock) closed like for every other child.
+spool_perl() { "$PERL" -e "$SPOOL_PERL" -- "$@" 7>&-; }
+
+# open_spool: refuse anything but a plain, single-link, non-empty regular file owned by the deploy
+# user and not over the limit. SPOOL_ID, SPOOL_SIZE and SPOOL_UID are what the helper saw on the
+# file it opened; the stream later insists on the same file.
 open_spool() {
-  local before after type owner links size want_uid
+  local facts type owner links size want_uid
   [[ -d $SPOOL_DIR && ! -L $SPOOL_DIR ]] || die 5 "the spool directory $SPOOL_DIR is missing or is a symbolic link"
   SPOOL_DIR_OK=1
   [[ ! -L $SPOOL_FILE ]] || die 5 "the spool file is a symbolic link; refusing it"
   [[ -f $SPOOL_FILE ]] || die 5 "the spool file is missing or is not a regular file"
-  before=$(stat -c '%d:%i' -- "$SPOOL_FILE") || die 5 "cannot look at the spool file"
-  SPOOL_ID=$before
-  exec 9<"$SPOOL_FILE" || die 5 "cannot open the spool file"
-  after=$(stat -L -c '%d:%i' -- /proc/self/fd/9) || die 5 "cannot look at the open spool file"
-  [[ $before == "$after" ]] || die 5 "the spool file changed while it was being opened; refusing it"
-  IFS='|' read -r type owner links size < <(stat -L -c '%F|%u|%h|%s' -- /proc/self/fd/9)
-  [[ $type == regular* ]] || die 5 "the spool file is not a regular file"
+  facts=$(spool_perl facts "$SPOOL_FILE" 2>&1) || die 5 "the spool file cannot be opened safely (a link, or not a plain file): ${facts:0:200}"
+  IFS='|' read -r SPOOL_ID type owner links size <<<"$facts"
+  [[ $SPOOL_ID =~ ^[0-9]+:[0-9]+$ && $type =~ ^[a-z]+$ && $owner =~ ^[0-9]+$ && $links =~ ^[0-9]+$ && $size =~ ^[0-9]+$ ]] ||
+    die 5 "cannot look at the spool file: ${facts:0:200}"
+  [[ $type == regular ]] || die 5 "the spool file is not a regular file"
   want_uid=$(id -u -- "$DEPLOY_USER" 2>/dev/null) || die 5 "the deploy user $DEPLOY_USER does not exist"
   [[ $owner == "$want_uid" ]] || die 5 "the spool file is not owned by $DEPLOY_USER (owner id $owner)"
   [[ $links == 1 ]] || die 5 "the spool file has $links hard links; refusing it"
   [[ $size -gt 0 ]] || die 5 "the spool file is empty"
   [[ $size -le $MAX_TARBALL ]] || die 5 "the spool file is too large ($size bytes; the limit is $MAX_TARBALL)"
+  SPOOL_SIZE=$size
+  SPOOL_UID=$owner
+}
+
+# load_pipeline: the spool file, at most MAX_TARBALL bytes of it, unpacked (as the environment's user,
+# at most MAX_UNPACKED bytes of output) into podman load (also as that user). No child holds the lock.
+load_pipeline() {
+  spool_perl stream "$SPOOL_FILE" "$MAX_TARBALL" "$SPOOL_ID" "$SPOOL_UID" |
+    as_env "$GZIP" -dc |
+    head -c "$MAX_UNPACKED" 7>&- |
+    podman_run load
+}
+
+# quote_output: text that came out of a tool that read the tarball, made safe for a CI log: only
+# printable ASCII (a carriage return or an escape cannot hide a line), at most 20 lines, and every line
+# starts with a fixed prefix, so no line can begin with "::" (a GitHub Actions workflow command).
+quote_output() {
+  tr -c '[:print:]\n' '?' | head -n 20 | sed 's/^/[podman] /'
 }
 
 # --- the arguments ----------------------------------------------------------------------
@@ -390,14 +531,19 @@ main() {
   flock -n 7 || die 4 "another deploy is already running; nothing was changed"
   HAVE_LOCK=1
   open_spool
-  say "deploying $SHA to $ENV_NAME (spool file $(stat -L -c %s /proc/self/fd/9) bytes)"
+  say "deploying $SHA to $ENV_NAME (spool file $SPOOL_SIZE bytes)"
 
   # --- 2. what is deployed now
   PREV_CMS=$(read_image cms)
   PREV_WEB=$(read_image web)
   PREV_EXISTS=0
+  PREV_CMS_ID=
+  PREV_WEB_ID=
   if podman_run image exists "$PREV_CMS" >/dev/null 2>&1 && podman_run image exists "$PREV_WEB" >/dev/null 2>&1; then
     PREV_EXISTS=1
+    # the ids of the release that runs now, so a rollback can check that it is the one running again
+    PREV_CMS_ID=$(norm_id "$(podman_run image inspect --format '{{.Id}}' "$PREV_CMS" 2>/dev/null | head -n 1)")
+    PREV_WEB_ID=$(norm_id "$(podman_run image inspect --format '{{.Id}}' "$PREV_WEB" 2>/dev/null | head -n 1)")
   fi
 
   # --- 3. load the images
@@ -406,6 +552,7 @@ main() {
   want_ids=("$(norm_id "$CMS_ID")" "$(norm_id "$WEB_ID")")
   listing=$(list_images) || die 1 "could not list the images of oc-$ENV_NAME"
   fill_names "$listing" BEFORE
+  fill_ids "$listing" BEFORE_IDS
   for i in 0 1; do
     ref=${want_refs[$i]}
     id=${want_ids[$i]}
@@ -415,17 +562,17 @@ main() {
   done
   STATE=loaded # from here on a failure removes what the load added
   local loadout
-  if ! loadout=$(head -c "$MAX_TARBALL" <&9 | gzip -dc | head -c "$MAX_UNPACKED" | podman_run load 2>&1); then
-    say "podman could not load the tarball:"
-    printf '%s\n' "$loadout" | head -n 20 >&2 || true
+  if ! loadout=$(load_pipeline 2>&1); then
+    say "podman could not load the tarball (what it said is quoted, and is not ours):"
+    printf '%s\n' "$loadout" | quote_output >&2 || true
     die 6 "the tarball could not be loaded; nothing was changed"
   fi
-  exec 9<&-
 
   # --- 4. the ids must be the ones CI sent, and nothing else may have come in
-  local -A after=()
+  local -A after=() after_ids=()
   listing=$(list_images) || die 1 "could not list the images of oc-$ENV_NAME after the load"
   fill_names "$listing" after
+  fill_ids "$listing" after_ids
   local got
   for i in 0 1; do
     ref=${want_refs[$i]}
@@ -446,6 +593,11 @@ main() {
       problem+=" the tarball moved the existing tag $name to another image;"
     fi
   done
+  # an image with no name: the two images CI sent are named, so anything else that is new is not theirs
+  for id in "${!after_ids[@]}"; do
+    [[ -z ${BEFORE_IDS[$id]+x} && $id != "${want_ids[0]}" && $id != "${want_ids[1]}" ]] || continue
+    problem+=" the tarball also held an image with no name ($id);"
+  done
   if [[ -n $problem ]]; then
     die 3 "the loaded images do not match what CI sent:$problem nothing was changed (the load is undone)"
   fi
@@ -457,11 +609,15 @@ main() {
   set_image cms "$NEW_CMS"
   set_image web "$NEW_WEB"
   [[ $(read_image cms) == "$NEW_CMS" && $(read_image web) == "$NEW_WEB" ]] || die 1 "the Image= lines were not rewritten as intended"
+  # shellcheck disable=SC2034  # read through an indirect expansion in images_current
+  EXPECT_CMS_ID=${want_ids[0]}
+  # shellcheck disable=SC2034
+  EXPECT_WEB_ID=${want_ids[1]}
   restart_both || die 1 "the services did not restart"
 
   # --- 6. wait for both health checks
   say "waiting up to ${HEALTH_TIMEOUT}s for /_health on $CMS_PORT and /healthz on $WEB_PORT"
-  wait_healthy || die 1 "the new release did not become healthy within ${HEALTH_TIMEOUT}s"
+  wait_healthy || die 1 "the new release did not become healthy, with both running containers made from the new images, within ${HEALTH_TIMEOUT}s"
 
   STATE=finished
   say "healthy: $ENV_NAME now runs $SHA"

@@ -85,32 +85,60 @@ printf 'podman %s\n' "$*" >>"$S/calls.log"
 key() { local k=${1//\//_}; printf '%s' "${k//:/_}"; }
 case ${1:-} in
   load)
+    # a long-lived child, like the "pause" process rootless podman leaves behind; its output goes
+    # nowhere, so only an inherited descriptor (the lock) can tie it to the caller
+    if [[ -f $S/podman-spawns-daemon ]]; then ( sleep 25 </dev/null >/dev/null 2>&1 & echo $! >>"$S/daemon.pids" ); fi
+    [[ -e /proc/$$/fd/7 ]] && echo "podman load had descriptor 7 open" >>"$S/fds.log"
     content=$(cat)
+    # text a crafted tarball could make podman print: GitHub reads a line that starts with :: as a command
+    if [[ -f $S/load-error-text ]]; then cat "$S/load-error-text" >&2; exit 125; fi
     case $content in *CORRUPT*) echo "Error: payload does not match any of the supported image formats" >&2; exit 125 ;; esac
     while read -r kw name id created; do
+      if [[ $kw == untagged ]]; then
+        # an image in the tarball that has no name ("untagged ID CREATED")
+        mkdir -p "$S/untagged"
+        printf '<none> %s %s\n' "$name" "$id" >"$S/untagged/${name//:/_}"
+        printf 'Loaded image(s): %s\n' "$name"
+        continue
+      fi
       [[ $kw == image ]] || continue
       [[ $name == */* ]] || name="localhost/$name"
       # A name that moves to another image leaves the old image behind, untagged, as podman does.
       if [[ -f $S/images/$(key "$name") ]]; then
-        read -r _ oldid _ <"$S/images/$(key "$name")"
-        mkdir -p "$S/orphans"
-        cp -- "$S/images/$(key "$name")" "$S/orphans/$oldid"
+        read -r _ oldid oldcreated <"$S/images/$(key "$name")"
+        if [[ $oldid != "$id" ]]; then
+          mkdir -p "$S/untagged"
+          printf '<none> %s %s\n' "$oldid" "$oldcreated" >"$S/untagged/${oldid//:/_}"
+        fi
       fi
       printf '%s %s %s\n' "$name" "$id" "$created" >"$S/images/$(key "$name")"
+      rm -f "$S/untagged/${id//:/_}"
       printf 'Loaded image: %s\n' "$name"
     done <<<"$content"
+    ;;
+  container)
+    # podman container inspect --format {{.ImageID}} oc-<app>-<env>: the id the RUNNING container was made from
+    [[ ${2:-} == inspect && ${3:-} == --format && ${4:-} == '{{.ImageID}}' ]] || { echo "fake podman: unexpected container arguments: $*" >&2; exit 99; }
+    app=${5:-}
+    app=${app#oc-}
+    app=${app%%-*}
+    [[ -f $S/running-$app ]] || { echo "Error: no such container ${5:-}" >&2; exit 125; }
+    read -r id <"$S/running-$app"
+    printf '%s\n' "${id#sha256:}"
     ;;
   image)
     case ${2:-} in
       ls)
         [[ ${3:-} == --format && ${4:-} == '{{.Id}}|{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' ]] || { echo "fake podman: unexpected image ls arguments: $*" >&2; exit 99; }
-        for f in "$S"/images/*; do
+        files=("$S"/images/* "$S"/untagged/*)
+        [[ -f $S/ls-reverse ]] && mapfile -t files < <(printf '%s\n' "${files[@]}" | sort -r)
+        for f in "${files[@]}"; do
           [[ -f $f ]] || continue
           read -r name id created <"$f"
           [[ -f $S/bare-ids ]] && id=${id#sha256:}
           # Real podman 4.9.3 prints {{.CreatedAt}} like "2026-03-23 21:33:59 +0000 UTC" and
           # {{.Created}} like "8 months ago"; the fakes are seeded with unix seconds.
-          printf '%s|%s|%s\n' "$id" "$(date -u -d "@$created" '+%Y-%m-%d %H:%M:%S +0000 UTC')" "$name"
+          printf '%s|%s|%s\n' "$id" "$(date -u -d "@$created" '+%Y-%m-%d %H:%M:%S +0000 UTC')" "${name/<none>/<none>:<none>}"
         done
         ;;
       inspect)
@@ -130,15 +158,27 @@ case ${1:-} in
   rmi)
     [[ ${2:-} == -- ]] || { echo "fake podman: rmi without --: $*" >&2; exit 99; }
     f=$S/images/$(key "${3:-}")
-    [[ -f $f ]] || { echo "Error: ${3:-}: image not known" >&2; exit 1; }
-    rm -f -- "$f"
+    if [[ -f $f ]]; then
+      rm -f -- "$f"
+    else
+      # an id: only an image with no name can be removed by it (as with podman, a named one needs its names removed first)
+      want=${3:-}
+      want=${want#sha256:}
+      for f in "$S"/untagged/*; do
+        [[ -f $f ]] || continue
+        read -r _ id _ <"$f"
+        [[ ${id#sha256:} == "$want" ]] && { rm -f -- "$f"; exit 0; }
+      done
+      echo "Error: ${3:-}: image not known" >&2
+      exit 1
+    fi
     ;;
   tag)
     # podman tag SOURCE-ID DEST: give DEST the image with that id.
     [[ ${2:-} == -- ]] || { echo "fake podman: tag without --: $*" >&2; exit 99; }
     found=""
     foundid=""
-    for f in "$S"/images/* "$S"/orphans/*; do
+    for f in "$S"/images/* "$S"/untagged/*; do
       [[ -f $f ]] || continue
       read -r name id created <"$f"
       if [[ ${id#sha256:} == "${3#sha256:}" ]]; then
@@ -148,7 +188,24 @@ case ${1:-} in
     done
     # (An image whose only name was taken away is kept by id, like podman keeps it untagged.)
     [[ -n $found ]] || exit 1
+    # the name leaves the image it was on; that image has no name now, unless it has another one
+    if [[ -f $S/images/$(key "${4:-}") ]]; then
+      read -r _ previd prevcreated <"$S/images/$(key "${4:-}")"
+      if [[ $previd != "$foundid" ]]; then
+        others=0
+        for f in "$S"/images/*; do
+          [[ -f $f && $f != "$S/images/$(key "${4:-}")" ]] || continue
+          read -r _ id _ <"$f"
+          [[ $id == "$previd" ]] && others=1
+        done
+        if [[ $others == 0 ]]; then
+          mkdir -p "$S/untagged"
+          printf '<none> %s %s\n' "$previd" "$prevcreated" >"$S/untagged/${previd//:/_}"
+        fi
+      fi
+    fi
     printf '%s %s %s\n' "${4:-}" "$foundid" "$found" >"$S/images/$(key "${4:-}")"
+    rm -f "$S/untagged/${foundid//:/_}"
     ;;
   *) echo "fake podman: unexpected: $*" >&2; exit 99 ;;
 esac
@@ -171,6 +228,20 @@ case ${1:-} in
     if [[ -f $S/restart-fails-for ]] && [[ $cms == *"$(cat "$S/restart-fails-for")" ]]; then
       echo "Job for oc-cms.service failed" >&2
       exit 1
+    fi
+    if [[ -f $S/systemctl-spawns-daemon ]]; then ( sleep 25 </dev/null >/dev/null 2>&1 & echo $! >>"$S/daemon.pids" ); fi
+    # the containers now run what the files say, unless the restart is told to leave the old ones
+    if [[ ! -f $S/restart-keeps-old ]]; then
+      for app in cms web; do
+        ref=$cms
+        [[ $app == web ]] && ref=$web
+        k=${ref//\//_}
+        k=${k//:/_}
+        if [[ -f $S/images/$k ]]; then
+          read -r _ id _ <"$S/images/$k"
+          printf '%s\n' "$id" >"$S/running-$app"
+        fi
+      done
     fi
     ;;
   daemon-reload | stop | is-active) ;;
@@ -206,6 +277,8 @@ printf '%s\n' "$2" >>"$S/runuser.log"
 user=$2
 shift 3
 if [[ -f $S/fail-sed-web && " $* " == *" sed "* && $* == *oc-web-* ]]; then exit 1; fi
+# (the roll-back's edit: the forward edits worked, a restart has happened, and now this one fails)
+if [[ -f $S/fail-sed-web-after-restart && -s $S/restarts.log && " $* " == *" sed "* && $* == *oc-web-* ]]; then exit 1; fi
 if [[ $1 == env ]]; then
   # The real call is: env HOME=... XDG_RUNTIME_DIR=... [DBUS_SESSION_BUS_ADDRESS=...] PROGRAM args
   printf 'env-call %s %s\n' "$user" "$*" >>"$S/runuser-env.log"
@@ -259,6 +332,9 @@ new_case() {
   # By default the old release is loaded in the fake store, and both services are healthy.
   seed_image "localhost/oc-cms:$SHA_OLD" "$(id_of 201)" 1000
   seed_image "localhost/oc-web:$SHA_OLD" "$(id_of 202)" 1000
+  # ... and the containers running now were made from those two images
+  printf '%s\n' "$(id_of 201)" >"$S/running-cms"
+  printf '%s\n' "$(id_of 202)" >"$S/running-web"
   APPLY_ENV=(
     "OC_ROOT=$R" "OC_PODMAN=$F/podman" "OC_SYSTEMCTL=$F/systemctl" "OC_CURL=$F/curl" "OC_RUNUSER=$F/runuser"
     "OC_DEPLOY_USER=$OWNER" "OC_ENV_UID=1234" "OC_HEALTH_TIMEOUT=2" "OC_HEALTH_INTERVAL=0.2"
@@ -777,6 +853,194 @@ for e in prod staging; do
   check "ports of $e: CMS" test "$(release_port cms "$e")" = "$(oc_cms_port "$e")"
   check "ports of $e: web" test "$(release_port web "$e")" = "$(oc_web_port "$e")"
 done
+
+# ======================================================================================
+# Task 4b: the deploy follow-ups from the Task 4 review
+kill_daemons() { # the long-lived children the fakes start
+  [[ -f $S/daemon.pids ]] && xargs -r kill <"$S/daemon.pids" 2>/dev/null
+  return 0
+}
+lock_free() { flock -n "$R/var/lib/oc-deploy/apply.lock" true; }
+uf() { printf "%s/untagged/%s" "$S" "${1//:/_}"; } # the fake podman keeps an image with no name in a file named by its id
+
+section "no child of the root script holds the deploy lock (a long-lived podman child must not make every later deploy exit 4)"
+new_case fd-podman
+good_tarball
+touch "$S/podman-spawns-daemon"
+run_good
+if [[ $RC -eq 0 ]]; then ok "podman starts a long-lived child during the load: the deploy still exits 0"; else notok "daemon child (podman): exits $RC"; show_out; fi
+check "a long-lived child of podman does not hold the lock: the next deploy can take it" lock_free
+check "podman load had no descriptor 7 (the lock) open" bash -c "[[ ! -s '$S/fds.log' ]]"
+kill_daemons
+new_case fd-systemctl
+good_tarball
+touch "$S/systemctl-spawns-daemon"
+run_good
+if [[ $RC -eq 0 ]]; then ok "systemctl starts a long-lived child at the restart: the deploy still exits 0"; else notok "daemon child (systemctl): exits $RC"; show_out; fi
+check "a long-lived child of systemctl does not hold the lock" lock_free
+kill_daemons
+new_case fd-gzip
+good_tarball
+cat >"$F/gzip" <<EOF
+#!/usr/bin/env bash
+( sleep 25 </dev/null >/dev/null 2>&1 & echo \$! >>"$S/daemon.pids" )
+exec /usr/bin/gzip "\$@"
+EOF
+chmod +x "$F/gzip"
+APPLY_ENV+=("OC_GZIP=$F/gzip")
+run_good
+if [[ $RC -eq 0 ]]; then ok "gzip starts a long-lived child while unpacking: the deploy still exits 0"; else notok "daemon child (gzip): exits $RC"; show_out; fi
+check "a long-lived child of gzip does not hold the lock" lock_free
+check "gzip -dc ran as the environment user, through runuser (not as root)" bash -c "grep -q 'env-call oc-prod env -i PATH=[^ ]* LC_ALL=C $F/gzip -dc' '$S/runuser-env.log'"
+kill_daemons
+
+section "when the two Image= lines cannot both be put back, both services are stopped (never a mixed pair)"
+new_case rollback-mixed
+good_tarball
+echo "$SHA_NEW" >"$S/bad-tag"
+touch "$S/fail-sed-web-after-restart"
+run_good
+if [[ $RC -eq 1 ]]; then ok "a roll-back that can put back only one Image= line: exits 1"; else notok "mixed roll-back: exits $RC"; show_out; fi
+check "mixed roll-back: only the first restart (the new pair) happened, the mixed pair was never started" test "$(restart_count)" -eq 1
+check "mixed roll-back: both services were stopped, last" bash -c "tail -n 1 '$S/systemctl.log' | grep -qx -- '--user stop oc-cms-prod.service oc-web-prod.service'"
+check "mixed roll-back: the CMS line is back, the web line is not (so the files are the mixed pair, and nothing runs them)" bash -c "[[ \$(sed -n 's/^Image=//p' '$Q/oc-cms-prod.container') == localhost/oc-cms:$SHA_OLD && \$(sed -n 's/^Image=//p' '$Q/oc-web-prod.container') == localhost/oc-web:$SHA_NEW ]]"
+check "mixed roll-back: the output says the services are left stopped" grep -qi 'left stopped' "$OUT"
+
+section "images with no name that come in a tarball are removed"
+new_case untagged
+make_tarball "image oc-cms:$SHA_NEW $CMS_ID 2000" "image oc-web:$SHA_NEW $WEB_ID 2000" "untagged $(id_of 888) 2000"
+run_good
+if [[ $RC -eq 3 ]]; then ok "a tarball with an image that has no name exits 3"; else notok "untagged image: exits $RC"; show_out; fi
+check "untagged image: it is removed again" bash -c "[[ ! -f '$(uf "$(id_of 888)")' ]]"
+check "untagged image: the new tags are removed too" bash -c "[[ ! -f '$S/images/localhost_oc-cms_$SHA_NEW' && ! -f '$S/images/localhost_oc-web_$SHA_NEW' ]]"
+check "untagged image: Quadlet files unchanged and no systemctl call" files_unchanged
+check "untagged image: no systemctl call" no_service_calls
+check "untagged image: the output names it" grep -q "$(hex64 888)" "$OUT"
+new_case untagged-before
+mkdir -p "$S/untagged"
+printf '<none> %s 500\n' "$(id_of 777)" >"$(uf "$(id_of 777)")"
+good_tarball
+run_good
+if [[ $RC -eq 0 ]]; then ok "an image with no name that was here BEFORE the deploy does not stop it (positive control): exits 0"; else notok "old untagged image: exits $RC"; show_out; fi
+check "an untagged image that was here before is left alone" bash -c "[[ -f '$(uf "$(id_of 777)")' ]]"
+new_case untagged-retag
+make_tarball "image oc-cms:$SHA_NEW $CMS_ID 2000" "image oc-web:$SHA_NEW $WEB_ID 2000" "image oc-cms:$SHA_OLD $(id_of 666) 2000"
+run_good
+if [[ $RC -eq 3 ]]; then ok "a tarball that moves a release tag exits 3"; else notok "moved tag: exits $RC"; show_out; fi
+check "moved tag: the image the tarball put on the tag is removed, not left behind without a name" bash -c "[[ ! -f '$(uf "$(id_of 666)")' ]]"
+check "moved tag: the old release is back on its tag, with no stray untagged copy of it" bash -c "[[ \$(awk '{print \$2}' '$S/images/localhost_oc-cms_$SHA_OLD') == '$(id_of 201)' && ! -f '$(uf "$(id_of 201)")' ]]"
+
+section "the running containers must be made from the new images (a service that answers is not enough)"
+new_case still-old
+good_tarball
+touch "$S/restart-keeps-old"
+run_good
+if [[ $RC -eq 1 ]]; then ok "services that answer, but whose containers are still the old release: exits 1 (not 0)"; else notok "old containers still running: exits $RC (wanted 1)"; show_out; fi
+check "old containers: the output says what is running" grep -q "the running oc-cms container is made from $(hex64 201), not from the expected image $(hex64 101)" "$OUT"
+check "old containers: both files are back on the old tags" files_unchanged
+check "old containers: it rolled back (the old pair was restarted)" bash -c "[[ \$(grep -c '^restart ' '$S/restarts.log') -eq 2 ]]"
+new_case no-container
+good_tarball
+rm -f "$S/running-cms"
+touch "$S/restart-keeps-old"
+run_good
+if [[ $RC -eq 1 ]]; then ok "a container that does not exist after the restart: exits 1"; else notok "no container: exits $RC"; show_out; fi
+check "no container: the output says there is none" grep -q 'no running container' "$OUT"
+
+section "what podman prints about the tarball is quoted, so it cannot start a workflow command"
+new_case quote-output
+good_tarball
+printf '%s\n' '::error::pwned' '::add-mask::secret' $'\r::warning::hidden by a carriage return' '::stop-commands::x' >"$S/load-error-text"
+run_good
+if [[ $RC -eq 6 ]]; then ok "a podman error with workflow commands in it: exits 6"; else notok "crafted podman error: exits $RC"; show_out; fi
+check "no output line starts with ::" bash -c "! grep -q '^::' '$OUT'"
+check "the lines are shown with a fixed prefix" grep -q '^\[podman\] ::error::pwned$' "$OUT"
+check "a carriage return cannot hide a command either" bash -c "! grep -q $'\r' '$OUT' && grep -q '^\[podman\] ?::warning::hidden' '$OUT'"
+check "at most 20 lines are quoted" bash -c "[[ \$(grep -c '^\[podman\] ' '$OUT') -le 20 ]]"
+
+section "the spool file is opened with O_NOFOLLOW and O_NONBLOCK (a swap after the checks changes nothing)"
+swap_perl() { # NAME BODY: a stand-in for perl that does BODY just before the helper opens the file, then runs the real perl
+  printf '#!/usr/bin/env bash\nspool=%s/var/lib/oc-deploy/spool/incoming.tar.gz\nif [[ $* == *" %s "* ]]; then touch %s/perl-swapped\n%s\nfi\nexec /usr/bin/perl "$@"\n' "$R" "$1" "$S" "$2" >"$F/perl-swap"
+  chmod +x "$F/perl-swap"
+}
+run_good_timeout() { # like run_good, but the script may not hang
+  local -a a
+  mapfile -t a < <(deploy_args "$@")
+  RC=0
+  timeout 30 env "${APPLY_ENV[@]}" bash "$APPLY" "${a[@]}" >"$OUT" 2>&1 || RC=$?
+}
+new_case swap-fifo
+good_tarball
+# shellcheck disable=SC2016  # the body is shell text for the stand-in, written out as it is
+swap_perl facts 'rm -f "$spool"; mkfifo "$spool"'
+APPLY_ENV+=("OC_PERL=$F/perl-swap")
+run_good_timeout
+check "the stand-in for perl was used (the swap happened between the checks and the open)" test -e "$S/perl-swapped"
+if [[ $RC -eq 5 ]]; then ok "a file swapped for a named pipe just before the open is refused (exit 5), not waited for"; else notok "swapped for a FIFO: exits $RC (124 would mean it hung)"; show_out; fi
+check "swapped for a FIFO: nothing was loaded" bash -c "! grep -q '^podman load' '$S/calls.log'"
+new_case swap-symlink
+good_tarball
+cp "$SPOOL_DIR/incoming.tar.gz" "$CASE/elsewhere.tar.gz"
+# shellcheck disable=SC2016
+swap_perl facts 'rm -f "$spool"; ln -s '"$CASE"'/elsewhere.tar.gz "$spool"'
+APPLY_ENV+=("OC_PERL=$F/perl-swap")
+run_good_timeout
+check "the stand-in for perl was used" test -e "$S/perl-swapped"
+if [[ $RC -eq 5 ]]; then ok "a file swapped for a symbolic link just before the open is refused (exit 5), not followed"; else notok "swapped for a symlink: exits $RC"; show_out; fi
+check "swapped for a symlink: the output says it could not be opened safely" grep -q 'cannot be opened safely' "$OUT"
+check "swapped for a symlink: the file it pointed to is untouched" test -f "$CASE/elsewhere.tar.gz"
+check "swapped for a symlink: nothing was loaded" bash -c "! grep -q '^podman load' '$S/calls.log'"
+new_case swap-stream
+good_tarball
+# shellcheck disable=SC2016
+swap_perl stream 'cp "$spool" "$spool.new" && mv -f "$spool.new" "$spool"'
+APPLY_ENV+=("OC_PERL=$F/perl-swap")
+run_good_timeout
+check "the stand-in for perl was used (the swap happened between the description and the stream)" test -e "$S/perl-swapped"
+if [[ $RC -eq 6 ]]; then ok "a file replaced by another file after it was described is not loaded (exit 6)"; else notok "replaced between the two helper runs: exits $RC"; show_out; fi
+check "replaced file: the output says it was replaced" grep -q 'replaced after it was checked' "$OUT"
+check "replaced file: Quadlet files unchanged and no systemctl call" files_unchanged
+check "replaced file: no systemctl call" no_service_calls
+new_case swap-none
+good_tarball
+swap_perl nothing-matches 'true'
+APPLY_ENV+=("OC_PERL=$F/perl-swap")
+run_good_timeout
+if [[ $RC -eq 0 ]]; then ok "the same stand-in with no swap deploys normally (positive control)"; else notok "perl stand-in without a swap: exits $RC"; show_out; fi
+
+section "a user that does not exist exits 7, not 1"
+RC=0
+# shellcheck disable=SC2016  # the bash -c program is single-quoted on purpose
+bash -c 'unset OC_ENV_UID; source "$1"; ENV_NAME=prod; SHA=$2; id() { return 1; }; setup' _ "$APPLY" "$SHA_NEW" >"$W/nouser.out" 2>&1 || RC=$?
+if [[ $RC -eq 7 ]]; then ok "no oc-<env> user: exits 7 (the server is not set up as expected)"; else notok "missing user: exits $RC (wanted 7)"; sed 's/^/         | /' "$W/nouser.out" | head -n 5; fi
+check "missing user: the message says so and that nothing was changed" grep -q 'does not exist.*nothing was changed' "$W/nouser.out"
+RC=0
+# shellcheck disable=SC2016  # the bash -c program is single-quoted on purpose
+bash -c 'unset OC_ENV_UID; source "$1"; ENV_NAME=prod; SHA=$2; id() { echo notanumber; }; setup' _ "$APPLY" "$SHA_NEW" >"$W/nouser2.out" 2>&1 || RC=$?
+if [[ $RC -eq 7 ]]; then ok "an id that is not a number: exits 7"; else notok "bad uid: exits $RC (wanted 7)"; fi
+
+section "pruning breaks a tie in CreatedAt the same way whatever order podman lists the images in"
+prune_tie() { # LIST-REVERSED(yes|no): five releases made in the same second, one deploy; prints the tags left
+  new_case "prune-tie-$1"
+  rm -f "$S"/images/*
+  local i sha
+  for i in 1 2 3 4 5; do
+    sha=$(printf '%040x' "$((0xbbbb + i))")
+    seed_image "localhost/oc-cms:$sha" "$(id_of $((310 + i)))" 1000
+    seed_image "localhost/oc-web:$sha" "$(id_of $((410 + i)))" 1000
+  done
+  CUR=$(printf '%040x' "$((0xbbbb + 5))")
+  sed -i "s|^Image=.*|Image=localhost/oc-cms:$CUR|" "$Q/oc-cms-prod.container"
+  sed -i "s|^Image=.*|Image=localhost/oc-web:$CUR|" "$Q/oc-web-prod.container"
+  [[ $1 == yes ]] && touch "$S/ls-reverse"
+  good_tarball
+  run_good
+  find "$S/images" -type f -printf '%f\n' | sort | tr '\n' ' '
+}
+tie_a=$(prune_tie no)
+tie_b=$(prune_tie yes)
+check "equal creation times: the same tags are kept whichever way the list is ordered" test "$tie_a" = "$tie_b"
+check "equal creation times: the new tag, then the first by name, and the current one are kept; the rest go" bash -c "[[ '$tie_a' == *localhost_oc-cms_$SHA_NEW* && '$tie_a' == *localhost_oc-cms_$(printf '%040x' $((0xbbbb + 1)))* && '$tie_a' == *localhost_oc-cms_$(printf '%040x' $((0xbbbb + 2)))* && '$tie_a' == *localhost_oc-cms_$(printf '%040x' $((0xbbbb + 5)))* && '$tie_a' != *localhost_oc-cms_$(printf '%040x' $((0xbbbb + 3)))* && '$tie_a' != *localhost_oc-cms_$(printf '%040x' $((0xbbbb + 4)))* ]]"
 
 # ======================================================================================
 # deploy-release.sh: the forced command run as the restricted deploy user
