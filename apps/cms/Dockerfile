@@ -10,9 +10,11 @@
 #
 # Both base images are pinned by digest. The tag is only a label for people; the digest decides,
 # so a build never changes by itself. How a security fix reaches the base: the weekly CI run
-# re-scans these pinned digests with Trivy and fails when a vulnerability that has a fix is in
-# one of them; Renovate (renovate.json) then opens a pull request that bumps the digest; the base
-# changes only when a person merges that pull request.
+# scans the final image with Trivy (the distroless base and the app layers on top of it, not the
+# build stage, which is thrown away) and fails when a HIGH or CRITICAL vulnerability that has a
+# fix is in it. Once the Renovate GitHub app is installed on the repository, Renovate
+# (renovate.json) opens the pull request that bumps the digest; until then a person bumps it by
+# hand. Either way the base changes only when a person merges that change.
 #   build stage: node:22-bookworm-slim, Node 22.23.5.
 #   final stage: distroless nodejs22 on Debian 13, Node 22.23.5. The Debian 12 variant
 #   (nodejs22-debian12) is still on Node 22.22.0, older than the 22.23.4 the spec requires.
@@ -60,7 +62,8 @@ RUN mkdir -p apps/cms/public/uploads \
 # the result.
 #
 # Then what the image must not contain is removed (spec 10.9):
-#  - the files a dependency ships that are tests, and any .git, .cache or .env* entry;
+#  - the files and folders a dependency ships that are tests (*.test.*, *.spec.*, and folders
+#    called __tests__, test or tests), and any .git, .cache or .env* entry;
 #  - esbuild's native binary, which is in two places (the platform package, and a copy that
 #    esbuild's install script puts over its own bin/esbuild). esbuild is a build tool that
 #    Strapi's admin build pulls in; the app never starts it at run time. The Go standard
@@ -69,7 +72,8 @@ RUN mkdir -p apps/cms/public/uploads \
 # infra/images/verify-image.sh and the Trivy scan check the result.
 RUN pnpm --filter @oc/cms deploy --prod /home/node/app \
     && find /home/node/app/node_modules \
-        \( -name .git -o -name .cache -o -name '.env*' -o -name '*.test.*' -o -name '*.spec.*' \) \
+        \( -name .git -o -name .cache -o -name '.env*' -o -name '*.test.*' -o -name '*.spec.*' \
+           -o \( -type d \( -name __tests__ -o -name test -o -name tests \) \) \) \
         -prune -exec rm -rf '{}' + \
     && find /home/node/app/node_modules \
         \( -path '*/node_modules/@esbuild/*/bin/esbuild' -o -path '*/node_modules/esbuild/bin/esbuild' \) \
@@ -78,7 +82,9 @@ RUN pnpm --filter @oc/cms deploy --prod /home/node/app \
 # ---- final stage -----------------------------------------------------------------------
 FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:f991e86a080567b6ab7c3392e36f7a0a4f9300639e526b48ee81b92d523af62e AS final
 
-USER 65532
+# The group is written down as well as the user: a uid with no group runs with gid 0 when the
+# image's /etc/passwd has no entry for it, and infra/images/verify-image.sh refuses that.
+USER 65532:65532
 # Strapi starts from the current folder, so the app lives in /app and that is the WORKDIR.
 # Telemetry is already off in package.json; the variable makes sure of it. HOME is /tmp because
 # the container may run as a user with no home folder, and Strapi's command loader wants to

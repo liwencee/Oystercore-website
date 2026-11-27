@@ -65,6 +65,87 @@ expect_exit() {
   fi
 }
 
+# expect_text TEXT: the verifier's output must contain TEXT (anywhere), to show that a check
+# failed for its stated reason and not for another.
+expect_text() {
+  if grep -qF -- "$1" <<<"$out"; then ok "output says: $1"; else
+    notok "output does not say '$1'"
+    printf '%s\n' "$out" | sed 's/^/         | /' | head -n 40
+  fi
+}
+
+# A stand-in for `docker`, put in front of the real one on PATH for the runs that need to see or
+# change what the verifier asks Docker to do. It passes everything on to the real docker, except:
+#   SHIM_FAKE_DB=1     the database client container (the `mariadb --protocol=tcp -h HOST` run)
+#                      is not started: the SQL is read and dropped, and the host is logged, so a
+#                      CMS run needs no database;
+#   SHIM_ROOT_RW=1     `--read-only` is taken out of every `docker run`, which is the one fault a
+#                      read-only check must catch and an image cannot cause by itself.
+# For each detached run (the app) it logs the umask the verifier had and the mode of the --env-file,
+# and keeps a copy of that file (throwaway values; the verifier deletes the original at its end).
+real_docker=$(command -v docker)
+mkdir "$work/shim"
+shimlog="$work/shim.log"
+shimenv="$work/shim.env"
+cat >"$work/shim/docker" <<'SHIM'
+#!/usr/bin/env bash
+set -u
+args=("$@")
+if [[ ${1:-} == run ]]; then
+  detached=0 db=0 host='' envfile=''
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    case ${args[i]} in
+      -d) detached=1 ;;
+      --protocol=tcp) db=1 ;;
+      -h) host=${args[i + 1]:-} ;;
+      --env-file) envfile=${args[i + 1]:-} ;;
+    esac
+  done
+  if ((db && ${SHIM_FAKE_DB:-0})); then
+    printf 'db-client host=%s\n' "$host" >>"$SHIM_LOG"
+    cat >/dev/null
+    exit 0
+  fi
+  if ((detached)); then
+    printf 'app-run umask=%s\n' "$(umask)" >>"$SHIM_LOG"
+    if [[ -n $envfile ]]; then
+      if command -v cygpath >/dev/null 2>&1; then envfile=$(cygpath -u "$envfile"); fi
+      printf 'env-file mode=%s\n' "$(stat -c %a "$envfile")" >>"$SHIM_LOG"
+      cp "$envfile" "$SHIM_ENV_COPY"
+    fi
+    if [[ ${SHIM_ROOT_RW:-0} == 1 ]]; then
+      keep=()
+      for a in "${args[@]}"; do [[ $a == --read-only ]] || keep+=("$a"); done
+      args=("${keep[@]}")
+    fi
+  fi
+fi
+exec "$SHIM_REAL_DOCKER" "${args[@]}"
+SHIM
+chmod +x "$work/shim/docker"
+
+# run_verifier_shim ARGS...: run_verifier, with the stand-in in front. SHIM_* and OC_VERIFY_*
+# settings put before the call reach it.
+run_verifier_shim() {
+  rc=0
+  : >"$shimlog"
+  rm -f "$shimenv"
+  out=$(PATH="$work/shim:$PATH" SHIM_REAL_DOCKER=$real_docker SHIM_LOG=$shimlog SHIM_ENV_COPY=$shimenv \
+    OC_VERIFY_START_TIMEOUT=20 bash "$verifier" "$@" 2>&1) || rc=$?
+}
+
+# shim_lines PREFIX / shim_env_database: what the shim saw, on one line, for a failure message.
+shim_lines() { grep "^$1" "$shimlog" 2>/dev/null | tr '\n' ' '; }
+shim_env_database() { grep -E '^DATABASE_(HOST|PORT)=' "$shimenv" 2>&1 | tr '\n' ' '; }
+
+# expect_log TEXT: the shim's log must have a line that starts with TEXT (and the log must exist,
+# which shows the shim was in front of the verifier's docker at all).
+expect_log() {
+  if grep -q "^$1" "$shimlog" 2>/dev/null; then ok "shim log has: $1"; else
+    notok "shim log lacks a line starting '$1'; it holds: $(tr '\n' '|' <"$shimlog" 2>/dev/null)"
+  fi
+}
+
 # ---- the verifier is strict about how it is called --------------------------------------
 run_verifier
 expect_exit 2
@@ -109,7 +190,7 @@ build() {
 good_dockerfile() {
   cat <<EOF
 FROM ${1:-$distroless13}
-USER ${2:-65532}
+USER ${2:-65532:65532}
 WORKDIR /app
 COPY server.mjs healthcheck.mjs ./
 ARG STATUS=200
@@ -122,7 +203,7 @@ EOF
 good_dockerfile | build good
 run_verifier oc-verify-test-good:test web
 expect_exit 0
-for id in non-root no-shell node-version forbidden size healthcheck read-only keep-id; do expect_line "PASS $id"; done
+for id in non-root no-shell node-version forbidden esbuild size healthcheck read-only keep-id; do expect_line "PASS $id"; done
 
 # ---- each fault is caught, by the check that is meant to catch it ----------------------------
 good_dockerfile "$distroless13" 0 | build root
@@ -134,6 +215,32 @@ good_dockerfile "$distroless13" nonroot | build named-user
 run_verifier oc-verify-test-named-user:test web
 expect_exit 1
 expect_line 'FAIL non-root'
+
+# A uid with no group named. The distroless base has a passwd entry for 65532, so that process
+# really gets gid 65532, but the verifier does not rely on the base's /etc/passwd: it wants the
+# gid written down.
+good_dockerfile "$distroless13" 65532 | build no-gid
+run_verifier oc-verify-test-no-gid:test web
+expect_exit 1
+expect_line 'FAIL non-root'
+expect_text 'names no group'
+
+# The reason for that rule, shown and not only claimed: a uid that has no passwd entry and no
+# group named runs with gid 0 (and group 0 among its groups).
+good_dockerfile "$distroless13" 65533 | build no-entry
+gid_seen=$(docker run --rm --entrypoint /nodejs/bin/node oc-verify-test-no-entry:test -e 'process.stdout.write(process.getgid() + ":" + process.getgroups())')
+if [[ $gid_seen == '0:0' ]]; then ok 'a uid with no passwd entry and no gid runs with gid 0'; else notok "uid 65533 with no gid ran with gid:groups $gid_seen, expected 0:0"; fi
+run_verifier oc-verify-test-no-entry:test web
+expect_exit 1
+expect_line 'FAIL non-root'
+expect_text 'names no group'
+
+# A named gid that is root's.
+good_dockerfile "$distroless13" 65532:0 | build gid-zero
+run_verifier oc-verify-test-gid-zero:test web
+expect_exit 1
+expect_line 'FAIL non-root'
+expect_text 'gid 0'
 
 # An older Node: the check on the Node version.
 good_dockerfile "$distroless12" | build old-node
@@ -162,7 +269,7 @@ expect_line 'FAIL healthcheck'
 {
   printf 'FROM %s AS donor\nFROM %s\n' "$node_slim" "$distroless13"
   printf 'COPY --from=donor /bin/dash /bin/sh\n'
-  printf 'USER 65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\nCMD ["/app/server.mjs"]\n'
+  printf 'USER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\nCMD ["/app/server.mjs"]\n'
 } | build shell
 run_verifier oc-verify-test-shell:test web
 expect_exit 1
@@ -174,7 +281,7 @@ expect_line 'FAIL no-shell'
   printf 'RUN mkdir -p /home/node/p/.git /home/node/p/.cache /home/node/p/lib \\\n'
   printf ' && touch /home/node/p/.env /home/node/p/.env.production /home/node/p/.git/HEAD /home/node/p/.cache/x \\\n'
   printf ' /home/node/p/lib/a.test.js /home/node/p/lib/b.spec.ts\n'
-  printf 'FROM %s\nUSER 65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\n' "$distroless13"
+  printf 'FROM %s\nUSER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\n' "$distroless13"
   printf 'COPY --from=plant /home/node/p /app/p\nCMD ["/app/server.mjs"]\n'
 } | build forbidden
 run_verifier oc-verify-test-forbidden:test web
@@ -184,10 +291,107 @@ for name in '\.env$' '\.env\.production' '\.git/HEAD' '\.cache/x' 'a\.test\.js' 
   if grep -qE "^ +\| .*$name" <<<"$out"; then ok "forbidden lists $name"; else notok "forbidden does not list $name"; fi
 done
 
+# Test folders, which dependencies ship (a lone `test` or `tests` or `__tests__` folder, in any
+# package), are forbidden too.
+{
+  printf 'FROM %s AS plant\nUSER node\n' "$node_slim"
+  printf 'RUN mkdir -p /home/node/p/a/test /home/node/p/b/__tests__ /home/node/p/c/tests \\\n'
+  printf ' && touch /home/node/p/a/test/x.js /home/node/p/b/__tests__/y.js /home/node/p/c/tests/z.js\n'
+  printf 'FROM %s\nUSER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\n' "$distroless13"
+  printf 'COPY --from=plant /home/node/p /app/p\nCMD ["/app/server.mjs"]\n'
+} | build testdirs
+run_verifier oc-verify-test-testdirs:test web
+expect_exit 1
+expect_line 'FAIL forbidden'
+for name in 'a/test/' 'b/__tests__/' 'c/tests/'; do
+  if grep -qF "$name" <<<"$out"; then ok "forbidden lists $name"; else notok "forbidden does not list $name"; fi
+done
+
+# (control) Names that only look like test folders are fine: folders called contest, latest and
+# testing, a file called test, and a file called tests.js. The same image carries the esbuild
+# look-alikes (below), so one run shows that neither check is too broad.
+printf '#!/usr/bin/env node\nrequire("./main");\n' >"$work/ctx/esbuild-wrapper.js"
+{
+  printf 'FROM %s AS plant\nUSER node\n' "$node_slim"
+  printf 'RUN mkdir -p /home/node/p/contest /home/node/p/latest /home/node/p/testing /home/node/p/bin \\\n'
+  printf ' && touch /home/node/p/contest/a.js /home/node/p/latest/b.js /home/node/p/testing/c.js /home/node/p/bin/test /home/node/p/tests.js\n'
+  printf 'FROM %s\nUSER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\n' "$distroless13"
+  printf 'COPY --from=plant /home/node/p /app/p\n'
+  # An ELF outside esbuild's folders, and a JavaScript file called esbuild inside them.
+  printf 'COPY --from=plant /bin/true /app/p/bin/true\n'
+  printf 'COPY esbuild-wrapper.js /app/node_modules/esbuild/bin/esbuild\nCMD ["/app/server.mjs"]\n'
+} | build lookalikes
+run_verifier oc-verify-test-lookalikes:test web
+expect_exit 0
+expect_line 'PASS forbidden'
+expect_line 'PASS esbuild'
+
+# An esbuild binary: the ELF that esbuild's install script leaves at node_modules/esbuild/bin/esbuild
+# and the platform package's own, and one that was moved and renamed inside the package.
+{
+  printf 'FROM %s AS donor\nFROM %s\nUSER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\n' "$node_slim" "$distroless13"
+  printf 'COPY --from=donor /bin/true /app/node_modules/@esbuild/linux-x64/bin/esbuild\n'
+  printf 'COPY --from=donor /bin/true /app/node_modules/esbuild/lib/helper.bin\n'
+  printf 'CMD ["/app/server.mjs"]\n'
+} | build esbuild-elf
+run_verifier oc-verify-test-esbuild-elf:test web
+expect_exit 1
+expect_line 'FAIL esbuild'
+expect_text '2 ELF binary(ies) under an esbuild path'
+for name in '@esbuild/linux-x64/bin/esbuild' 'esbuild/lib/helper.bin'; do
+  if grep -qE "^ +\| .*$name" <<<"$out"; then ok "esbuild lists $name"; else notok "esbuild does not list $name"; fi
+done
+
 # The size limit: the same good image, under a limit that is too small.
 OC_VERIFY_MAX_BYTES=1000000 run_verifier oc-verify-test-good:test web
 expect_exit 1
 expect_line 'FAIL size'
+
+# ---- what the verifier asks Docker to do, seen through the stand-in for docker ------------------
+# The root filesystem is proved read-only from inside the running container (/proc/mounts), not
+# taken from the flag: with `--read-only` taken out, a good image must fail both runs. (Writing to
+# /app is refused on a writable root too, because /app belongs to root: that is what the old
+# check relied on.) The controls are the two CMS runs below, which have the stand-in in front too
+# and must pass `read-only` and `keep-id`.
+SHIM_ROOT_RW=1 run_verifier_shim oc-verify-test-good:test web
+expect_exit 1
+expect_line 'FAIL read-only'
+expect_line 'FAIL keep-id'
+expect_text 'mounted read-write'
+
+# The strict umask the verifier uses for its secrets file ends with that file: the umask the
+# caller had (0027 here, which is neither of the verifier's own two) is the one in force when
+# the app is started, and (where the filesystem keeps modes) the secrets file is still private,
+# mode 600. The same run is the control for the database host (the default,
+# host.docker.internal) and shows that the stand-in alone does not make a good image fail.
+# No database is needed: the stand-in drops the SQL.
+old_umask=$(umask)
+umask 0027
+SHIM_FAKE_DB=1 run_verifier_shim oc-verify-test-good:test cms
+umask "$old_umask"
+expect_exit 0
+expect_line 'PASS read-only'
+expect_line 'PASS keep-id'
+expect_log 'app-run umask=0027'
+other_umasks=$(grep '^app-run' "$shimlog" | grep -vc 'umask=0027' || true)
+if [[ $other_umasks == 0 ]]; then ok "every app run had the caller's umask"; else notok "$other_umasks app run(s) had another umask: $(shim_lines app-run)"; fi
+# A filesystem that works a file's mode out from the umask of whoever asks (Git Bash on Windows)
+# cannot show that the secrets file was made private, so the mode is checked only where it is kept.
+( umask 077; : >"$work/mode-probe" )
+if [[ $( (umask 0022; stat -c %a "$work/mode-probe") ) == 600 ]]; then
+  expect_log 'env-file mode=600'
+else
+  printf 'skip   - the secrets file is mode 600: this filesystem does not keep file modes (CI, on Linux, checks it)\n'
+fi
+expect_log 'db-client host=host.docker.internal'
+if grep -qx 'DATABASE_HOST=host.docker.internal' "$shimenv" 2>/dev/null; then ok '(control) the CMS gets DATABASE_HOST=host.docker.internal by default'; else notok "(control) no DATABASE_HOST=host.docker.internal in the env file: $(shim_env_database)"; fi
+
+# The CMS gets the database host and port it was told, in the env file the verifier writes.
+SHIM_FAKE_DB=1 OC_VERIFY_DB_HOST=db.example.test OC_VERIFY_DB_PORT=3999 run_verifier_shim oc-verify-test-good:test cms
+expect_exit 0
+expect_log 'db-client host=db.example.test'
+if grep -qx 'DATABASE_HOST=db.example.test' "$shimenv" 2>/dev/null; then ok 'the CMS gets DATABASE_HOST from OC_VERIFY_DB_HOST'; else notok "the env file does not say DATABASE_HOST=db.example.test: $(shim_env_database)"; fi
+if grep -qx 'DATABASE_PORT=3999' "$shimenv" 2>/dev/null; then ok 'the CMS gets DATABASE_PORT from OC_VERIFY_DB_PORT'; else notok 'the env file does not say DATABASE_PORT=3999'; fi
 
 if ((failed)); then
   printf '\n%s check(s) of the verifier failed\n' "$failed"

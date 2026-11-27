@@ -7,15 +7,23 @@
 # Every check runs even when an earlier one fails, so one run shows everything. Output is one
 # line per check, "PASS <id> <detail>" or "FAIL <id> <detail>".
 #
-#   non-root      the image's user is a numeric uid and gid, and neither is 0
+#   non-root      the image's user is a numeric uid AND an explicit numeric gid (USER 65532:65532),
+#                 and neither is 0. A uid with no gid runs with gid 0 whenever the image's
+#                 /etc/passwd has no entry for it, so a lone uid is refused.
 #   no-shell      no shell binary is in the filesystem and /bin/sh cannot be started
 #   node-version  `<image> --version` prints Node 22.23.4 or newer
-#   forbidden     no .env*, .git, *.test.*, *.spec.* or .cache entry anywhere in the filesystem
+#   forbidden     no .env*, .git, *.test.*, *.spec.* or .cache entry, and no __tests__, test or
+#                 tests folder, anywhere in the filesystem
+#   esbuild       no ELF binary under a path with an esbuild folder or file name (esbuild is a
+#                 build tool; its Go binary is scanned, and needs updating, like the app)
 #   size          the filesystem is under the limit below (1.5 times the measured size)
 #   healthcheck   the health-check script exits 1 when nothing is listening (a control, so a
 #                 script that always exits 0 cannot pass)
 #   read-only     the image starts under the Quadlet sandbox (read-only root, no capabilities,
-#                 no new privileges, a small /tmp) and /app/healthcheck.mjs passes
+#                 no new privileges, a small /tmp) and /app/healthcheck.mjs passes. In the
+#                 running container the process is not root, /proc/mounts shows the root
+#                 filesystem read-only, /app cannot be written and /tmp can. (Capabilities and
+#                 no-new-privileges are asked for, not read back.)
 #   keep-id       the same, as a host user's uid that has no entry in the image (what
 #                 `--userns=keep-id` does on the server)
 #
@@ -112,7 +120,9 @@ db_port=${OC_VERIFY_DB_PORT:-3307}
 db_admin_user=${OC_VERIFY_DB_USER:-root}
 # The dev root password from docker-compose.dev.yml (a throwaway local database, not a secret).
 db_admin_password=${OC_VERIFY_DB_PASSWORD:-oc_dev_root}
-readonly db_client_image='mariadb:11.4'
+# Pinned by digest (the multi-arch index of mariadb:11.4), the same as the MariaDB service in
+# .github/workflows/ci.yml; Renovate bumps both (renovate.json).
+readonly db_client_image='mariadb:11.4@sha256:a8992b5e5404d11e03c54a31d0c1bdea3fd116d283aa6d1a627551f29045309b'
 
 # Windows Git Bash gives docker.exe a Windows path for files; elsewhere the path is already right.
 host_path() {
@@ -195,7 +205,9 @@ check_non_root() {
     gid=${BASH_REMATCH[3]:-}
     if ((10#$uid == 0)); then
       fail non-root "the image runs as uid 0 (User=$user)"
-    elif [[ -n $gid ]] && ((10#$gid == 0)); then
+    elif [[ -z $gid ]]; then
+      fail non-root "User=$user names no group, and a uid that has no entry in the image's /etc/passwd runs with gid 0 (write USER $uid:<gid>)"
+    elif ((10#$gid == 0)); then
       fail non-root "the image runs with gid 0 (User=$user)"
     else
       pass non-root "User=$user"
@@ -276,17 +288,52 @@ check_forbidden() {
     fail forbidden 'the filesystem could not be listed'
     return
   fi
-  # Any path component: .git, .cache, .env*, *.test.*, *.spec.*
-  found=$(grep -E '(^|/)(\.git|\.cache|\.env[^/]*|[^/]*\.test\.[^/]*|[^/]*\.spec\.[^/]*)(/|$)' \
+  # Any path component: .git, .cache, .env*, *.test.*, *.spec.*; and a folder (an entry that ends
+  # in "/") called __tests__, test or tests. A file called "test" is not a test folder.
+  found=$(grep -E '(^|/)((\.git|\.cache|\.env[^/]*|[^/]*\.test\.[^/]*|[^/]*\.spec\.[^/]*)(/|$)|(__tests__|tests?)/)' \
     "$work/list.txt" || true)
   if [[ -z $found ]]; then
-    pass forbidden "none of .env*, .git, *.test.*, *.spec.*, .cache in $(wc -l <"$work/list.txt" | tr -d ' ') entries"
+    pass forbidden "none of .env*, .git, *.test.*, *.spec.*, .cache, __tests__, test, tests in $(wc -l <"$work/list.txt" | tr -d ' ') entries"
   else
     fail forbidden "$(printf '%s\n' "$found" | wc -l | tr -d ' ') forbidden entries, for example:"
     printf '%s\n' "$found" | head -n 10 | indent
   fi
 }
 check_forbidden
+
+# ---- esbuild ------------------------------------------------------------------------------
+# esbuild is a build tool that Strapi's admin build and Vite pull in. Its native binary is a Go
+# program, so it brings the Go standard library's advisories into the image, and the app never
+# starts it. The Dockerfiles delete it; this proves it. Every file (not folder, not link) whose
+# path has an esbuild component is read, because a binary can be renamed or moved inside the
+# package; the file counts when it starts with the ELF magic bytes. A JavaScript wrapper called
+# esbuild is not an ELF and does not count.
+check_esbuild() {
+  local f magic found='' n=0
+  if ((!fs_ok)); then
+    fail esbuild 'the filesystem could not be listed'
+    return
+  fi
+  grep -E '(^|/)[^/]*esbuild[^/]*(/|$)' "$work/list.txt" | grep -v '/$' >"$work/esbuild.list" || true
+  if [[ -s $work/esbuild.list ]]; then
+    mkdir "$work/esbuild"
+    # A link that cannot be made here is not a file to read; whatever tar says goes to a file.
+    tar -xf "$work/fs.tar" -C "$work/esbuild" --no-same-owner -T "$work/esbuild.list" 2>"$work/esbuild.err" || true
+    while IFS= read -r f; do
+      [[ -f $work/esbuild/$f && ! -L $work/esbuild/$f ]] || continue
+      n=$((n + 1))
+      magic=$(head -c 4 "$work/esbuild/$f" | od -An -tx1 | tr -d ' \n')
+      if [[ $magic == 7f454c46 ]]; then found+="$f"$'\n'; fi
+    done <"$work/esbuild.list"
+  fi
+  if [[ -z $found ]]; then
+    pass esbuild "no ELF binary among the $n files under an esbuild path"
+  else
+    fail esbuild "$(printf '%s' "$found" | wc -l | tr -d ' ') ELF binary(ies) under an esbuild path, for example:"
+    printf '%s' "$found" | head -n 10 | indent
+  fi
+}
+check_esbuild
 
 # ---- size -----------------------------------------------------------------------------
 check_size() {
@@ -322,19 +369,22 @@ if [[ $app == cms ]]; then
   db_name="oc_verify_$(random 10)"
   db_user="ocv_$(random 10)"
   db_password=$(random 24)
-  umask 077
-  {
-    printf 'APP_KEYS=%s,%s,%s,%s\n' "$(random 22)" "$(random 22)" "$(random 22)" "$(random 22)"
-    printf 'API_TOKEN_SALT=%s\n' "$(random 22)"
-    printf 'ADMIN_JWT_SECRET=%s\n' "$(random 22)"
-    printf 'JWT_SECRET=%s\n' "$(random 22)"
-    printf 'TRANSFER_TOKEN_SALT=%s\n' "$(random 22)"
-    printf 'ENCRYPTION_KEY=%s\n' "$(random 22)"
-    printf 'DATABASE_CLIENT=mysql\nDATABASE_HOST=host.docker.internal\nDATABASE_PORT=%s\n' "$db_port"
-    printf 'DATABASE_NAME=%s\nDATABASE_USERNAME=%s\nDATABASE_PASSWORD=%s\nDATABASE_SSL=false\n' \
-      "$db_name" "$db_user" "$db_password"
-  } >"$work/cms.env"
-  umask 022
+  # A subshell, so the strict umask covers this one file and cannot outlive it: the caller's own
+  # umask is what applies to everything else the verifier makes.
+  (
+    umask 077
+    {
+      printf 'APP_KEYS=%s,%s,%s,%s\n' "$(random 22)" "$(random 22)" "$(random 22)" "$(random 22)"
+      printf 'API_TOKEN_SALT=%s\n' "$(random 22)"
+      printf 'ADMIN_JWT_SECRET=%s\n' "$(random 22)"
+      printf 'JWT_SECRET=%s\n' "$(random 22)"
+      printf 'TRANSFER_TOKEN_SALT=%s\n' "$(random 22)"
+      printf 'ENCRYPTION_KEY=%s\n' "$(random 22)"
+      printf 'DATABASE_CLIENT=mysql\nDATABASE_HOST=%s\nDATABASE_PORT=%s\n' "$db_host" "$db_port"
+      printf 'DATABASE_NAME=%s\nDATABASE_USERNAME=%s\nDATABASE_PASSWORD=%s\nDATABASE_SSL=false\n' \
+        "$db_name" "$db_user" "$db_password"
+    } >"$work/cms.env"
+  )
   app_env+=(--env-file "$(host_path "$work/cms.env")" --add-host host.docker.internal:host-gateway)
   # The app's own account sees only its own throwaway database, as in production.
   if ! sql_out=$(sql_create | db_sql 2>&1); then
@@ -383,14 +433,20 @@ run_sandboxed() {
       return
     fi
     if docker exec "$name" "$NODE_BIN" "$HEALTHCHECK_JS" >/dev/null 2>&1; then
-      # Under the sandbox the process is not root, cannot write to the app folder, and can
-      # write to /tmp. (A check that the sandbox is really on, not only that it was asked for.)
+      # What the running process sees. That the root is read-only is read from /proc/mounts (the
+      # mount's own options): a refused write to /app proves less, because /app belongs to root
+      # and a process that is not root cannot write there on a writable root either. The write to
+      # /app stays as the check that the code folder is not the process's to change.
+      # Capabilities and no-new-privileges are asked for in $sandbox but are not read back here.
       probe='const fs=require("fs");
         if (process.getuid()===0) { console.log("running as root"); process.exit(1); }
+        const root=fs.readFileSync("/proc/mounts","utf8").split("\n").map((l)=>l.split(" ")).filter((m)=>m[1]==="/").pop();
+        if (!root) { console.log("/proc/mounts has no entry for the root filesystem"); process.exit(1); }
+        if (!root[3].split(",").includes("ro")) { console.log("the root filesystem is mounted read-write (/proc/mounts: "+root[3]+")"); process.exit(1); }
         try { fs.writeFileSync("/app/.write-probe","x"); console.log("/app is writable"); process.exit(1); } catch {}
         try { fs.writeFileSync("/tmp/.write-probe","x"); } catch { console.log("/tmp is not writable"); process.exit(1); }'
       if out=$(docker exec "$name" "$NODE_BIN" -e "$probe" 2>&1); then
-        pass "$id" "healthy within $((SECONDS - deadline + start_timeout)) s; not root, /app read-only, /tmp writable"
+        pass "$id" "healthy within $((SECONDS - deadline + start_timeout)) s; not root, root filesystem read-only (/proc/mounts), /app not writable, /tmp writable"
       else
         fail "$id" "healthy, but the sandbox is not what it should be: $out"
       fi
