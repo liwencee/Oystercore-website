@@ -42,9 +42,29 @@ notok() {
   failed=$((failed + 1))
 }
 
+# An image the test hands to the verifier by its registry name (not one the test built itself)
+# has to be fetched by the test: the verifier refuses an image that is not in the local store
+# (exit 2), and a runner starts with an empty store. A `FROM` line pulls by itself; `docker run`
+# and the verifier do not. So the test pulls such an image first (quietly, and stops at once if
+# the pull fails), and run_verifier refuses to run one the test never pulled, which is what made
+# this test pass on a machine with a warm cache and fail on a clean runner.
+pulled=(none)
+pull_image() {
+  if ! docker pull --quiet "$1" >/dev/null; then
+    printf 'NOT OK - could not pull %s (the test needs it)\n' "$1" >&2
+    exit 1
+  fi
+  pulled+=("$1")
+}
+
 # run_verifier ARGS...: runs the verifier, keeps its output in $out and its exit status in $rc.
 # A short start timeout keeps the cases that are meant to fail from waiting a minute each.
 run_verifier() {
+  local p seen=0
+  if [[ ${1:-} == *@sha256:* ]]; then
+    for p in "${pulled[@]}"; do [[ $p == "$1" ]] && seen=1; done
+    ((seen)) || notok "run_verifier was given $1, which this test never pulled: it would pass only where that image is already cached"
+  fi
   rc=0
   out=$(OC_VERIFY_START_TIMEOUT=20 bash "$verifier" "$@" 2>&1) || rc=$?
 }
@@ -156,6 +176,7 @@ if grep -q 'no such image' <<<"$out"; then ok 'a missing image is reported'; els
 # ---- RED: the plain Node image is root, has a shell and has no health check --------------
 # node:22-bookworm-slim is a normal Node image. The verifier must fail it on the non-root,
 # no-shell and read-only checks, and pass what is true of it (its Node is new enough).
+pull_image "$node_slim"
 run_verifier "$node_slim" web
 expect_exit 1
 expect_line 'FAIL non-root'
