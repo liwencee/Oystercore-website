@@ -1445,7 +1445,7 @@ rm -f /usr/local/share/ca-certificates/oc-test-ca.crt
 update-ca-certificates --fresh >/dev/null 2>&1
 yes_if "TLS-01 passes when the CA is in the system's trust store (positive control: the chain is really verified)" grep -q '^PASS TLS-01 .*issued by a publicly trusted CA' "$work/verify-trustedcert.txt"
 VERIFY_ONLY=TLS-01 bash "$infra/verify.sh" >"$work/verify-othercert2.txt" 2>&1 || true
-yes_if "and it FAILs again once that CA is out of the trust store" grep -q '^FAIL TLS-01 .*neither Cloudflare' "$work/verify-othercert2.txt"
+yes_if "and it FAILs again once that CA is out of the trust store" grep -q '^FAIL TLS-01 .*neither named exactly as Cloudflare' "$work/verify-othercert2.txt"
 # Cloudflare's Origin CA is recognised by its name, matched exactly field by field: a lookalike must fail and say why
 # --- TLS-01: the issuer must be named EXACTLY as Cloudflare's Origin CA (or the chain must be public) ---------
 own=${own:-$work/owncert}
