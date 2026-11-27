@@ -1653,6 +1653,209 @@ check_ctr_03() {
   fi
 }
 
+# --- CTR-04: nothing in the environment user's own configuration changes what runs --------------
+# The environment user owns its home. A unit file or drop-in in ~/.config/systemd/user, or a
+# containers.conf, would change how its containers start without touching the Quadlet files that
+# CTR-01 reads. So the home must hold none of them, and (on a running server) what systemd and Podman
+# really have must match the hardening the templates ask for.
+
+# ctr04_user ENV CMD...: a command as the environment user, with its runtime directory and its own
+# systemd manager's bus (the same way the bootstrap talks to it).
+ctr04_user() {
+  local env=$1 uid
+  shift
+  uid=$(oc_env_uid "$env")
+  runuser -u "oc-$env" -- env "HOME=$(oc_env_home "$env")" "XDG_RUNTIME_DIR=/run/user/$uid" \
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" "$@"
+}
+
+# ctr04_unit_text ENV UNIT: `systemctl --user cat UNIT` (the unit as systemd really has it: the file
+# and every drop-in, each introduced by a "# /path" line).
+ctr04_unit_text() { ctr04_user "$1" systemctl --user cat "$2"; }
+
+# ctr04_inspect_facts ENV ROLE: the facts about the running container, one per line (see q_check_inspect).
+# `podman container exists` tells "no such container" (status 1) from "podman does not work" (125).
+# shellcheck disable=SC2016  # a Go template: the $ signs are its own
+CTR04_FORMAT='running={{.State.Running}}
+privileged={{.HostConfig.Privileged}}
+readonly={{.HostConfig.ReadonlyRootfs}}
+user={{.Config.User}}
+pids={{.HostConfig.PidsLimit}}
+memory={{.HostConfig.Memory}}
+effectivecaps={{len .EffectiveCaps}}
+capadd={{len .HostConfig.CapAdd}}
+securityopt={{range .HostConfig.SecurityOpt}}{{.}},{{end}}
+networks={{range $k, $v := .NetworkSettings.Networks}}{{$k}},{{end}}
+imagename={{.ImageName}}
+imageid={{.ImageID}}
+{{range .Mounts}}mount|{{.Type}}|{{.Source}}|{{.Destination}}|{{.RW}}
+{{end}}{{range $d, $o := .HostConfig.Tmpfs}}tmpfs|{{$d}}|{{$o}}
+{{end}}{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}port|{{.HostIP}}|{{.HostPort}}|{{$p}}
+{{end}}{{end}}'
+ctr04_inspect_facts() {
+  local env=$1 role=$2 rc=0
+  ctr04_user "$env" podman container exists "oc-$role-$env" >/dev/null 2>&1 || rc=$?
+  if [[ $rc -eq 1 ]]; then
+    echo "absent"
+    return 0
+  fi
+  [[ $rc -eq 0 ]] || return 1
+  ctr04_user "$env" podman container inspect --format "$CTR04_FORMAT" "oc-$role-$env"
+}
+
+# q_check_inspect ENV ROLE FACTS: one problem per line about what a running container really is.
+q_check_inspect() {
+  local env=$1 role=$2 facts=$3 uid gid hp ip line key val kind a b c d own
+  local -a mounts=() ports=() want=() topts=()
+  local tmpfs_n=0 tmpfs_o
+  uid=$(oc_env_uid "$env")
+  gid=$(oc_env_gid "$env")
+  if [[ $role == cms ]]; then
+    hp=$(oc_cms_port "$env")
+    ip=$OC_CMS_INTERNAL_PORT
+  else
+    hp=$(oc_web_port "$env")
+    ip=$OC_WEB_INTERNAL_PORT
+  fi
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    if [[ $line == mount\|* || $line == port\|* || $line == tmpfs\|* ]]; then
+      IFS='|' read -r kind a b c d <<<"$line"
+      if [[ $kind == mount ]]; then
+        case $a in
+          bind) mounts+=("$b:$c$([[ $d == true ]] || echo ':ro')") ;;
+          *) echo "the container has a mount of type '$a' ($b to $c), which is not allowed" ;;
+        esac
+      elif [[ $kind == tmpfs ]]; then
+        # (podman lists a tmpfs under HostConfig.Tmpfs: destination, then options such as rw,noexec,nosuid,size=64m,...)
+        tmpfs_n=$((tmpfs_n + 1))
+        if [[ $a != /tmp ]]; then
+          echo "the container has a tmpfs at $a (only /tmp may be one)"
+        else
+          IFS=, read -r -a topts <<<"$b"
+          word_in "${topts[*]//,/ }" noexec || echo "the tmpfs at /tmp is not noexec ('$b')"
+          for tmpfs_o in "${topts[@]}"; do
+            case $tmpfs_o in exec | suid | dev) echo "the tmpfs at /tmp has the option '$tmpfs_o' ('$b')" ;; *) ;; esac
+          done
+        fi
+      else
+        ports+=("$a:$b->$c")
+      fi
+      continue
+    fi
+    key=${line%%=*}
+    val=${line#*=}
+    case $key in
+      running) [[ $val == true ]] || echo "the container is not running" ;;
+      privileged) [[ $val == false ]] || echo "the container is privileged ('$val')" ;;
+      readonly) [[ $val == true ]] || echo "the container's root file system is not read-only ('$val')" ;;
+      user) [[ $val == "$uid:$gid" ]] || echo "the container runs as '$val', not $uid:$gid" ;;
+      pids) [[ $val =~ ^[1-9][0-9]*$ ]] || echo "the container has no pids limit ('$val')" ;;
+      memory) [[ $val =~ ^[1-9][0-9]*$ ]] || echo "the container has no memory limit ('$val')" ;;
+      effectivecaps) [[ $val == 0 ]] || echo "the container has $val capabilities (all must be dropped)" ;;
+      capadd) [[ $val == 0 ]] || echo "the container was given $val added capabilities" ;;
+      securityopt)
+        [[ ,$val == *,no-new-privileges,* ]] || echo "no-new-privileges is not set on the container ('$val')"
+        [[ $val != *unconfined* ]] || echo "the container runs with an unconfined security option ('$val')"
+        ;;
+      networks) [[ $val == "oc-$env," ]] || echo "the container is on the networks '$val', not only oc-$env" ;;
+      imagename) [[ $val =~ ^localhost/oc-$role(:[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$ ]] || echo "the container runs the image '$val', which is not a local oc-$role image" ;;
+      *) ;;
+    esac
+  done <<<"$facts"
+  mapfile -t want < <(q_expected_volumes "$env" "$role")
+  for own in "${want[@]}"; do
+    word_in "${mounts[*]}" "$own" || echo "the container lacks the mount '$own'"
+  done
+  for own in "${mounts[@]}"; do
+    word_in "${want[*]}" "$own" || echo "the container has the mount '$own', which is not allowed"
+  done
+  [[ $tmpfs_n -eq 1 ]] || echo "the container has $tmpfs_n tmpfs mounts, not exactly one (/tmp)"
+  [[ ${#ports[@]} -eq 1 && ${ports[0]} == "127.0.0.1:$hp->$ip/tcp" ]] || echo "the container's published ports are '${ports[*]}', not exactly 127.0.0.1:$hp->$ip/tcp"
+}
+
+check_ctr_04() {
+  local env home d p uid unit gen text bad="" notrun="" n=0 role facts f paths extra
+  for env in "${OC_ENV_LIST[@]}"; do
+    home=$(oc_env_home "$env")
+    n=$((n + 1))
+    # a check that cannot look fails: nothing can be said about a user, or a home, that is not there
+    if [[ -z $(oc_env_uid "$env") || ! -d $home ]]; then
+      bad+=" [oc-$env: the user, or its home $home, does not exist, so its configuration cannot be checked]"
+      continue
+    fi
+    # 1. no unit of ours, and no drop-in, in the user's own systemd folders
+    for d in "$home/.config/systemd/user" "$home/.local/share/systemd/user"; do
+      [[ -e $d || -L $d ]] || continue
+      if [[ -L $d ]]; then
+        bad+=" [oc-$env: $d is a symbolic link]"
+        continue
+      fi
+      while IFS= read -r p; do
+        [[ -n $p ]] && bad+=" [oc-$env: $p is a user-level systemd unit or drop-in of ours, which would override what the Quadlet files generate]"
+      done < <(find "$d" -mindepth 1 \( -name 'oc-*' -o -name 'oc-*.d' \) -print 2>/dev/null)
+    done
+    # 2. no containers.conf (it changes defaults: capabilities, runtime, hooks, ...)
+    for p in "$home/.config/containers/containers.conf" "$home/.config/containers/containers.conf.d"; do
+      if [[ -e $p || -L $p ]]; then
+        bad+=" [oc-$env: $p exists; a containers.conf changes how Podman starts containers]"
+      fi
+    done
+  done
+  if in_container; then
+    if [[ -n $bad ]]; then
+      fail "the environment users' own configuration changes what runs:$bad"
+    else
+      pass "$n environment user(s): no user-level systemd unit or drop-in of ours, and no containers.conf (configuration; the live units and containers are compared on a real server)"
+    fi
+    return 0
+  fi
+  if ! oc_have runuser || ! oc_have podman; then
+    fail "runuser or podman is missing, so what systemd and Podman really have cannot be compared"
+    return 0
+  fi
+  # 3. live: the units systemd really has (each must come from the generator alone, with no
+  # drop-in, and pass the same flag-by-flag check as the dry run), and the running containers
+  for env in "${OC_ENV_LIST[@]}"; do
+    uid=$(oc_env_uid "$env")
+    [[ -n $uid ]] || continue # (already reported above)
+    gen=""
+    for unit in "oc-cms-$env.service" "oc-web-$env.service" "oc-$env-network.service"; do
+      if ! text=$(ctr04_unit_text "$env" "$unit" 2>&1); then
+        bad+=" [oc-$env: systemctl --user cat $unit failed: ${text:0:100}]"
+        continue
+      fi
+      paths=$(grep '^# /' <<<"$text" | sed 's/^# //' || true)
+      extra=$(grep -v "^/run/user/$uid/systemd/generator/$unit\$" <<<"$paths" | tr '\n' ' ' || true)
+      [[ -z ${extra// /} ]] || bad+=" [oc-$env: $unit is not only what the generator wrote; systemd also reads: $extra]"
+      gen+="---$unit---"$'\n'"$(grep -v '^# /' <<<"$text")"$'\n'
+    done
+    while IFS= read -r p; do
+      [[ -n $p ]] && bad+=" [oc-$env live: $p]"
+    done < <(q_check_units "$env" "$gen")
+    for role in cms web; do
+      if ! facts=$(ctr04_inspect_facts "$env" "$role" 2>&1); then
+        bad+=" [oc-$env: podman could not be asked about oc-$role-$env: ${facts:0:100}]"
+        continue
+      fi
+      if [[ $facts == absent ]]; then
+        notrun+=" oc-$role-$env"
+        continue
+      fi
+      while IFS= read -r p; do
+        [[ -n $p ]] && bad+=" [oc-$role-$env: $p]"
+      done < <(q_check_inspect "$env" "$role" "$facts")
+    done
+  done
+  if [[ -n $bad ]]; then
+    fail "what systemd and Podman really have is not the hardened set-up:$bad"
+  elif [[ -n $notrun ]]; then
+    warn "no unit or configuration problem, but these containers do not exist yet, so they were not compared with the hardening (nothing has been deployed?):$notrun"
+  else
+    pass "$n environment user(s): no user-level unit, drop-in or containers.conf; the units systemd has pass the flag-by-flag check; the running containers are read-only, unprivileged, capability-free, limited, on their own network, with only their own mounts and a loopback port"
+  fi
+}
+
 check_svc_02() {
   local env cms web key bad="" missing n=0 stray extra a b f line
   for env in "${OC_ENV_LIST[@]}"; do
@@ -1930,7 +2133,7 @@ CHECKS=(
   "NGX-01 check_ngx_01"
   "OS-01 check_os_01" "OS-02 check_os_02" "OS-03 check_os_03" "OS-04 check_os_04" "OS-05 check_os_05"
   "OS-06 check_os_06" "OS-07 check_os_07" "OS-08 check_os_08"
-  "CTR-01 check_ctr_01" "CTR-02 check_ctr_02" "CTR-03 check_ctr_03"
+  "CTR-01 check_ctr_01" "CTR-02 check_ctr_02" "CTR-03 check_ctr_03" "CTR-04 check_ctr_04"
   "SVC-02 check_svc_02" "SVC-03 check_svc_03"
   "FS-01 check_fs_01" "FS-02 check_fs_02"
   "DB-01 check_db_01"

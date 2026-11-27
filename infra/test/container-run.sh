@@ -281,7 +281,7 @@ for id in NET-02 NET-06 OS-02 OS-03 OS-05 OS-08 CTR-03; do
   expect "$id is SKIPped in container mode" grep -q "^SKIP $id " "$work/verify1.txt"
 done
 expect "TLS-01 warns about the placeholder certificate" grep -q '^WARN TLS-01 .*PLACEHOLDER' "$work/verify1.txt"
-for id in SSH-01 SSH-02 SSH-03 SSH-04 DEP-01 DEP-02 NET-01 NET-03 NET-04 NET-05 OS-01 CTR-01 CTR-02 SVC-02 SVC-03 FS-01 FS-02 DB-01 PKG-01 PKG-02; do
+for id in SSH-01 SSH-02 SSH-03 SSH-04 DEP-01 DEP-02 NET-01 NET-03 NET-04 NET-05 OS-01 CTR-01 CTR-02 CTR-04 SVC-02 SVC-03 FS-01 FS-02 DB-01 PKG-01 PKG-02; do
   expect "$id passes" grep -q "^PASS $id " "$work/verify1.txt"
 done
 
@@ -921,6 +921,146 @@ yes_if "live NET-03: a configuration with only plain names says nothing is skipp
 live_cfg3="server { listen 8443 ssl; server_name *.wild.example.test; ssl_verify_client on; ssl_client_certificate $caok; }"
 live_out=$(live_net03 "$live_cfg3" 400)
 yes_if "live NET-03: when no name at all can be requested it FAILs and names what it skipped" live_has 'FAIL NET-03 no TLS host name could be tested live; skipped: [*.wild.example.test on port 8443'
+
+# --- Task 4b, step 2: CTR-04 (the environment users' own configuration) ------------------------------
+yes_if "before the CTR-04 changes: CTR-04 passes on the untouched system (so a FAIL below is caused by the change)" \
+  bash -c "VERIFY_ONLY=CTR-04 bash '$infra/verify.sh' 2>&1 | grep -q '^PASS CTR-04 '"
+mutation CTR-04 "a user-level systemd unit of the same name overrides oc-web-prod.service" \
+  "mkdir -p /home/oc-prod/.config/systemd/user && printf '[Service]\nExecStart=/bin/sh\n' >/home/oc-prod/.config/systemd/user/oc-web-prod.service" \
+  "rm -rf /home/oc-prod/.config/systemd" "oc-web-prod.service is a user-level systemd unit or drop-in of ours"
+mutation CTR-04 "a drop-in folder next to oc-cms-prod.service in the user's own systemd folder adds a command" \
+  "mkdir -p /home/oc-prod/.config/systemd/user/oc-cms-prod.service.d && printf '[Service]\nExecStartPre=/bin/sh\n' >/home/oc-prod/.config/systemd/user/oc-cms-prod.service.d/10-x.conf" \
+  "rm -rf /home/oc-prod/.config/systemd" "oc-cms-prod.service.d is a user-level systemd unit or drop-in of ours"
+mutation CTR-04 "staging gets a user-level unit for its own web service too" \
+  "mkdir -p /home/oc-staging/.config/systemd/user && printf '[Service]\n' >/home/oc-staging/.config/systemd/user/oc-web-staging.service" \
+  "rm -rf /home/oc-staging/.config/systemd" "oc-staging: /home/oc-staging/.config/systemd/user/oc-web-staging.service"
+mutation CTR-04 "a unit of ours sits in ~/.local/share/systemd/user (the other user-writable unit folder)" \
+  "mkdir -p /home/oc-prod/.local/share/systemd/user && printf '[Service]\n' >/home/oc-prod/.local/share/systemd/user/oc-prod-network.service" \
+  "rm -rf /home/oc-prod/.local" "/home/oc-prod/.local/share/systemd/user/oc-prod-network.service is a user-level systemd unit"
+mutation CTR-04 "the user's .config/systemd/user is a symbolic link" \
+  "mkdir -p /home/oc-prod/.config/systemd /tmp/elsewhere && ln -s /tmp/elsewhere /home/oc-prod/.config/systemd/user" \
+  "rm -rf /home/oc-prod/.config/systemd /tmp/elsewhere" "/home/oc-prod/.config/systemd/user is a symbolic link"
+mutation CTR-04 "the user has a containers.conf" \
+  "printf '[containers]\ndefault_capabilities=[\"ALL\"]\n' >/home/oc-prod/.config/containers/containers.conf" \
+  "rm -f /home/oc-prod/.config/containers/containers.conf" "/home/oc-prod/.config/containers/containers.conf exists"
+mutation CTR-04 "the user has a containers.conf.d folder" \
+  "mkdir -p /home/oc-staging/.config/containers/containers.conf.d" \
+  "rm -rf /home/oc-staging/.config/containers/containers.conf.d" "/home/oc-staging/.config/containers/containers.conf.d exists"
+mutation CTR-04 "an environment user does not exist (so nothing can be said about its configuration: a check that cannot look fails)" \
+  "usermod -l oc-prod-gone oc-prod" "usermod -l oc-prod oc-prod-gone" "the user, or its home /home/oc-prod, does not exist"
+# a harmless file of another name does not fail (so the check is not failing on anything it finds there)
+mkdir -p /home/oc-prod/.config/systemd/user
+printf '[Service]\n' >/home/oc-prod/.config/systemd/user/some-other.service
+VERIFY_ONLY=CTR-04 bash "$infra/verify.sh" >"$work/verify-ctr04-other.txt" 2>&1 || true
+rm -rf /home/oc-prod/.config/systemd
+yes_if "a user-level unit that is not ours (some-other.service) is left alone (positive control)" grep -q '^PASS CTR-04 ' "$work/verify-ctr04-other.txt"
+
+# CTR-04, the live half. A function stands in for `systemctl --user cat` and for `podman container
+# inspect`, so the comparison itself is tested here; what the real commands print is for a real server.
+c4=$work/c4
+cat >"$work/ctr04-live.sh" <<'EOS'
+source "$1/verify.sh"
+VERIFY_CONTAINER=0
+oc_load_config "$OC_CONFIG"; oc_validate_config
+ctr04_unit_text() { cat "$OC_UNITS_DIR/$2"; }
+ctr04_inspect_facts() {
+  local f=$OC_FACTS_DIR/$2-$1
+  if [[ $(cat "$f") == ERROR ]]; then echo "Error: podman is broken"; return 1; fi
+  cat "$f"
+}
+CUR=CTR-04
+check_ctr_04
+EOS
+c4_reset() { # good units (from Podman's own dry run, with the header systemctl cat prints) and good facts
+  local env role uid gid hp ip
+  rm -rf "$c4" && mkdir -p "$c4/units" "$c4/facts"
+  for env in prod staging; do
+    uid=$(id -u "oc-$env") && gid=$(id -g "oc-$env")
+    QUADLET_UNIT_DIRS=/home/oc-$env/.config/containers/systemd "$quadlet" -dryrun -user 2>/dev/null |
+      awk -v d="$c4/units" -v u="$uid" '/^---.*---$/ {name = substr($0, 4, length($0) - 6); f = d "/" name; print "# /run/user/" u "/systemd/generator/" name > f; next} name != "" {print >> f}'
+    for role in cms web; do
+      if [[ $role == cms ]]; then
+        hp=$([[ $env == prod ]] && echo 1337 || echo 1338)
+        ip=1337
+      else
+        hp=$([[ $env == prod ]] && echo 4321 || echo 4322)
+        ip=4321
+      fi
+      {
+        printf 'running=true\nprivileged=false\nreadonly=true\nuser=%s:%s\npids=256\nmemory=536870912\neffectivecaps=0\ncapadd=0\n' "$uid" "$gid"
+        printf 'securityopt=no-new-privileges,\nnetworks=oc-%s,\nimagename=localhost/oc-%s:bootstrap\nimageid=%064d\n' "$env" "$role" 7
+        if [[ $role == cms ]]; then
+          printf 'mount|bind|/var/lib/oc/%s|/var/lib/oc/%s|true\nmount|bind|/run/mysqld|/run/mysqld|false\nmount|bind|/run/clamav|/run/clamav|false\n' "$env" "$env"
+        else
+          printf 'mount|bind|/var/lib/oc/%s/media|/var/lib/oc/%s/media|false\n' "$env" "$env"
+        fi
+        printf 'tmpfs|/tmp|rw,noexec,nosuid,size=64m,rprivate,nodev,tmpcopyup\nport|127.0.0.1|%s|%s/tcp\n' "$hp" "$ip"
+      } >"$c4/facts/$role-$env"
+    done
+  done
+}
+c4_run() { OC_UNITS_DIR=$c4/units OC_FACTS_DIR=$c4/facts bash "$work/ctr04-live.sh" "$infra" 2>&1 || true; }
+c4_edit() { # FILE SED-EXPRESSION
+  sed -i -E "$2" "$1"
+}
+c4_expect() { # DESCRIPTION FILE SED-EXPRESSION TEXT-IN-THE-OUTPUT
+  local out
+  c4_reset
+  c4_edit "$2" "$3"
+  out=$(c4_run)
+  if [[ $out == FAIL\ CTR-04\ * && $out == *"$4"* ]]; then
+    ok "CTR-04 (live) fails when $1 (because: $4)"
+  else
+    notok "CTR-04 (live) should fail when $1 (because: $4); it said: ${out:0:300}"
+  fi
+}
+c4_reset
+out=$(c4_run)
+if [[ $out == "PASS CTR-04 2 environment user(s): no user-level unit"* ]]; then ok "CTR-04 (live) passes on the real generated units and good container facts (positive control)"; else notok "CTR-04 (live) positive control: $out"; fi
+ucat=$c4/units
+c4_expect "a drop-in is listed after the generated unit (systemctl cat shows another file)" "$ucat/oc-web-prod.service" '1a # /home/oc-prod/.config/systemd/user/oc-web-prod.service.d/x.conf' "oc-web-prod.service is not only what the generator wrote"
+c4_expect "the unit comes from the user's own file, not the generator" "$ucat/oc-cms-prod.service" '1s|.*|# /home/oc-prod/.config/systemd/user/oc-cms-prod.service|' "oc-cms-prod.service is not only what the generator wrote"
+c4_expect "the unit systemd has runs podman with --privileged (the same check as the dry run)" "$ucat/oc-web-staging.service" 's|^(ExecStart=/usr/bin/podman run )|\1--privileged |' "oc-staging live: oc-web-staging.service: the generated command has the flag '--privileged'"
+c4_expect "the unit systemd has gains an ExecStartPre" "$ucat/oc-web-prod.service" 's|^(ExecStart=)|ExecStartPre=/usr/bin/podman run --privileged x\n\1|' "oc-prod live: oc-web-prod.service: the generated unit has ExecStartPre="
+# shellcheck disable=SC2016  # sed expressions below: the $ signs are sed's, not the shell's
+c4_expect "the unit cannot be read at all" "$ucat/oc-prod-network.service" '1,$d' "has 0 ExecStart lines"
+f=$c4/facts
+c4_expect "a container is privileged" "$f/web-prod" 's/^privileged=false/privileged=true/' "oc-web-prod: the container is privileged"
+c4_expect "a container's root file system is writable" "$f/cms-staging" 's/^readonly=true/readonly=false/' "oc-cms-staging: the container's root file system is not read-only"
+c4_expect "a container runs as root" "$f/web-prod" 's/^user=.*/user=0:0/' "oc-web-prod: the container runs as '0:0'"
+c4_expect "a container has no memory limit" "$f/web-prod" 's/^memory=.*/memory=0/' "the container has no memory limit"
+c4_expect "a container has no pids limit" "$f/cms-prod" 's/^pids=.*/pids=0/' "the container has no pids limit"
+c4_expect "a container keeps capabilities" "$f/web-prod" 's/^effectivecaps=.*/effectivecaps=14/' "the container has 14 capabilities"
+c4_expect "a container was given an added capability" "$f/web-prod" 's/^capadd=.*/capadd=1/' "was given 1 added capabilities"
+c4_expect "a container lacks no-new-privileges" "$f/web-prod" 's/^securityopt=.*/securityopt=/' "no-new-privileges is not set"
+c4_expect "a container runs unconfined" "$f/web-prod" 's/^securityopt=.*/securityopt=no-new-privileges,seccomp=unconfined,/' "unconfined security option"
+c4_expect "a container is on the host network" "$f/web-prod" 's/^networks=.*/networks=host,/' "the container is on the networks 'host,'"
+c4_expect "a container runs an image from a registry" "$f/web-prod" 's|^imagename=.*|imagename=docker.io/library/node:22|' "which is not a local oc-web image"
+# shellcheck disable=SC2016
+c4_expect "a container has an extra mount of /" "$f/web-prod" '$a mount|bind|/|/host|true' "the container has the mount '/:/host', which is not allowed"
+c4_expect "a container mounts ClamAV read-write" "$f/cms-prod" 's|^(mount.bind./run/clamav./run/clamav.)false|\1true|' "the container has the mount '/run/clamav:/run/clamav', which is not allowed"
+c4_expect "a container lacks one of its mounts" "$f/cms-prod" '/mount.bind.\/run\/mysqld/d' "the container lacks the mount '/run/mysqld:/run/mysqld:ro'"
+# shellcheck disable=SC2016
+c4_expect "a container has a volume of another type" "$f/web-prod" '$a mount|volume|/var/lib/x|/data|true' "has a mount of type 'volume'"
+c4_expect "a container publishes on every interface" "$f/web-prod" 's/^port\|127.0.0.1/port|0.0.0.0/' "published ports are '0.0.0.0:4321->4321/tcp'"
+# shellcheck disable=SC2016
+c4_expect "a container publishes a second port" "$f/web-prod" '$a port|127.0.0.1|22|22/tcp' "published ports are"
+c4_expect "a container's tmpfs allows exec" "$f/web-prod" 's/^tmpfs\|\/tmp\|rw,noexec,/tmpfs|\/tmp|rw,exec,/' "the tmpfs at /tmp is not noexec"
+c4_expect "a container's tmpfs has the suid option" "$f/web-prod" 's/,nodev,/,suid,/' "the tmpfs at /tmp has the option 'suid'"
+c4_expect "a container has a tmpfs somewhere else" "$f/web-prod" 's/^tmpfs\|\/tmp\|/tmpfs|\/var\/lib\/oc|/' "the container has a tmpfs at /var/lib/oc"
+c4_expect "a container has no tmpfs at all" "$f/web-prod" '/^tmpfs\|/d' "the container has 0 tmpfs mounts, not exactly one"
+# shellcheck disable=SC2016
+c4_expect "podman cannot be asked about a container" "$f/web-prod" '1s/.*/ERROR/;2,$d' "podman could not be asked about oc-web-prod"
+# a container that does not exist yet is a warning (a first deploy has not happened), not a failure; the rest is still compared
+c4_reset
+printf 'absent\n' >"$f/web-prod"
+out=$(c4_run)
+if [[ $out == WARN\ CTR-04\ * && $out == *"do not exist yet"*"oc-web-prod"* ]]; then ok "CTR-04 (live): a container that does not exist yet is a WARN, not a FAIL (nothing deployed yet)"; else notok "absent container: ${out:0:300}"; fi
+sed -i 's/^privileged=false/privileged=true/' "$f/cms-prod"
+out=$(c4_run)
+if [[ $out == FAIL\ CTR-04\ * && $out == *"oc-cms-prod: the container is privileged"* ]]; then ok "CTR-04 (live): with one container absent the others are still compared"; else notok "absent plus bad: ${out:0:300}"; fi
+rm -rf "$c4"
+
 
 # --- VERIFY_CONTAINER=1 on a real host must not quietly skip the live checks ---
 realhost_made=0
