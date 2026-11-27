@@ -23,6 +23,16 @@
 **/*.key
 **/*.p12
 **/keys
+# Package-manager settings (an .npmrc or .yarnrc can hold a registry token), certificates and
+# bundles, private keys (id_rsa, id_ed25519, ...), secrets folders and encrypted files.
+**/.npmrc
+**/.yarnrc*
+**/*.pfx
+**/*.crt
+**/id_*
+**/secrets
+**/*.gpg
+**/*.age
 # Version control and the work files of this repository.
 **/.git
 **/.gitignore
@@ -45,11 +55,16 @@
 **/test-results
 **/playwright-report
 **/coverage
-# Local data: databases, dumps, uploads, logs.
+# Local data: databases, dumps, backups, archives (a copy of something is as sensitive as the
+# thing), uploads, logs.
 **/*.sqlite
 **/*.sqlite3
 **/*.db
 **/*.sql
+**/*.dump
+**/*.bak
+**/*.zip
+**/*.tar*
 **/*.log
 apps/cms/public/uploads
 apps/cms/exports
