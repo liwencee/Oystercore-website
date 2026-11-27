@@ -457,10 +457,13 @@ expect "verify.sh is clean again" bash -c "bash '$infra/verify.sh' | grep -q '^S
 # --------------------------------------------------------------------------------------
 section "the verifier notices breakage (each change is made, checked, and undone)"
 # mutation ID DESCRIPTION APPLY REVERT: verify.sh must print FAIL <ID> while the change is in place.
+# Only the check <ID> is run (VERIFY_ONLY), which keeps the two hundred changes below to a few seconds each;
+# the whole verifier is run in full before and after them (and "after the changes are undone verify.sh is
+# clean again" below runs it in full).
 mutation() { # ID DESCRIPTION APPLY REVERT [TEXT THAT MUST BE IN THE FAIL LINE [A SECOND TEXT THAT MUST ALSO BE IN IT]]
   local id=$1 desc=$2 apply=$3 revert=$4 expect=${5:-} expect2=${6:-} out line
   bash -c "$apply"
-  out=$(bash "$infra/verify.sh" 2>&1 || true)
+  out=$(VERIFY_ONLY=$id bash "$infra/verify.sh" 2>&1 || true)
   bash -c "$revert"
   line=$(grep "^FAIL $id " <<<"$out" | head -n 1 || true)
   if [[ -z $line ]]; then
@@ -840,6 +843,84 @@ mutation DEP-02 "/usr/local/sbin is writable by everyone" "chmod 0777 /usr/local
 mutation DEP-02 "the deploy user's home is writable by everyone" "chmod 0777 /var/lib/oc-deploy" "chmod 0755 /var/lib/oc-deploy" "can write /var/lib/oc-deploy"
 mutation DEP-02 "an environment's data folder is missing (so it cannot be checked, which is a failure)" \
   "mv /var/lib/oc/prod/tmp $dbak/prodtmp" "mv $dbak/prodtmp /var/lib/oc/prod/tmp" "/var/lib/oc/prod/tmp does not exist, so it cannot be checked"
+
+# --- Task 4b, step 1: NET-03 false passes ------------------------------------------------------------
+cacert=/etc/nginx/oc/cloudflare-origin-pull-ca.pem
+
+# (i) the old "ssl" directive, at any level and in any case
+mutation NET-03 "a server turns TLS on with 'ssl ON;' (upper case) and has no client certificate" \
+  "printf 'server { listen 8452; ssl ON; server_name sslonu.example.test; $tls }\n' >$ngxsrv" "rm -f $ngxsrv" "'ssl' directive" "sslonu.example.test: ssl_verify_client ''"
+mutation NET-03 "'ssl on;' is written at the http level (it makes every server TLS, the certificate-less ones too)" \
+  "printf 'ssl on;\nssl_certificate /etc/ssl/oc/origin.pem;\nssl_certificate_key /etc/ssl/oc/origin.key;\n' >$ngxsrv" "rm -f $ngxsrv" "'ssl' directive"
+mutation NET-03 "'ssl off;' is written (every ssl directive is refused, whatever its value)" \
+  "printf 'server { listen 8453; ssl off; server_name ssloff.example.test; }\n' >$ngxsrv" "rm -f $ngxsrv" "'ssl' directive"
+
+# (ii) TLS belongs to the port: a server whose listen says nothing about ssl is TLS when another listens on its port with ssl
+mutation NET-03 "a server with a plain 'listen 443;' shares the TLS port 443 and has no client certificate" \
+  "printf 'server { listen 443; server_name plain443.example.test; $tls }\n' >$ngxsrv" "rm -f $ngxsrv" "plain443.example.test: ssl_verify_client ''" "another server listens with ssl on the same port"
+mutation NET-03 "a server with 'listen 127.0.0.1:443;' (another address, the same port) has no client certificate" \
+  "printf 'server { listen 127.0.0.1:443; server_name plainaddr.example.test; $tls }\n' >$ngxsrv" "rm -f $ngxsrv" "plainaddr.example.test: ssl_verify_client ''" "another server listens with ssl on the same port"
+mutation NET-03 "a server with 'listen [::]:443;' has no client certificate" \
+  "printf 'server { listen [::]:443; server_name plainv6.example.test; $tls }\n' >$ngxsrv" "rm -f $ngxsrv" "plainv6.example.test: ssl_verify_client ''" "another server listens with ssl on the same port"
+mutation NET-03 "the second server of a pair on port 8454 says 'listen 8454;' (the first says ssl and has the certificate check)" \
+  "printf 'server { listen 8454 ssl; server_name pairA.example.test; $tls ssl_client_certificate $cacert; ssl_verify_client on; ssl_protocols TLSv1.2 TLSv1.3; }\nserver { listen 8454; server_name pairB.example.test; $tls }\n' >$ngxsrv" "rm -f $ngxsrv" "pairB.example.test: ssl_verify_client ''"
+mutation NET-03 "a port range with ssl (listen 8460-8470 ssl) is a layout this check cannot place on ports" \
+  "printf 'server { listen 8460-8470 ssl; server_name range.example.test; $tls ssl_client_certificate $cacert; ssl_verify_client on; ssl_protocols TLSv1.2 TLSv1.3; }\n' >$ngxsrv" "rm -f $ngxsrv" "could not be read reliably"
+
+# positive controls: the same parser accepts a plain server on a port of its own, and values in other cases
+printf 'server { listen 8455; server_name plain8455.example.test; return 404; }\n' >"$ngxsrv"
+bash "$infra/verify.sh" >"$work/verify-ngx-plain.txt" 2>&1 || true
+rm -f "$ngxsrv"
+yes_if "a plain HTTP server on a port of its own is still accepted (NET-03 counts the same 4 TLS sites)" grep -q '^PASS NET-03 all 4 TLS sites' "$work/verify-ngx-plain.txt"
+
+# (iii) the value of ssl_verify_client and ssl_reject_handshake is read without regard to case, as Nginx reads it
+printf 'server { listen 8456 ssl; server_name upper.example.test; %s ssl_client_certificate %s; ssl_verify_client ON; ssl_protocols TLSv1.2 TLSv1.3; return 404; }\n' "$tls" "$cacert" >"$ngxsrv"
+bash "$infra/verify.sh" >"$work/verify-ngx-upper.txt" 2>&1 || true
+rm -f "$ngxsrv"
+yes_if "'ssl_verify_client ON;' (upper case) is accepted as on (NET-03 counts 5 TLS sites)" grep -q '^PASS NET-03 all 5 TLS sites' "$work/verify-ngx-upper.txt"
+printf 'server { listen 8457 ssl; server_name rej.example.test; ssl_reject_handshake On; ssl_protocols TLSv1.2 TLSv1.3; }\n' >"$ngxsrv"
+bash "$infra/verify.sh" >"$work/verify-ngx-rej.txt" 2>&1 || true
+rm -f "$ngxsrv"
+yes_if "'ssl_reject_handshake On;' (mixed case) makes a server exempt like 'on' (NET-03 still counts 4 TLS sites)" grep -q '^PASS NET-03 all 4 TLS sites' "$work/verify-ngx-rej.txt"
+mutation NET-03 "a TLS server asks for the client certificate with 'ssl_verify_client OFF;' (upper case)" \
+  "printf 'server { listen 8458 ssl; server_name offupper.example.test; $tls ssl_client_certificate $cacert; ssl_verify_client OFF; }\n' >$ngxsrv" "rm -f $ngxsrv" "offupper.example.test: ssl_verify_client 'OFF'"
+
+# the live branch (unit tests: a function stands in for systemctl and curl, the configuration is text)
+live_net03() { # CONFIG-TEXT ANSWER-OF-CURL: the verdict of NET-03 as it would be on a real server, then the curl calls
+  rm -f "$work/curl.log"
+  OC_T=$1 OC_CURL_ANSWER=${2:-400} OC_CURL_LOG=$work/curl.log bash -c '
+    source "$1/verify.sh"
+    VERIFY_CONTAINER=0
+    systemctl() { return 0; }
+    curl() { printf "%s\n" "$*" >>"$OC_CURL_LOG"; printf "%s" "$OC_CURL_ANSWER"; }
+    NGINX_T=$OC_T
+    NGINX_SERVERS=$(nginx_servers <<<"$NGINX_T")
+    CUR=NET-03
+    check_net_03' _ "$infra"
+  [[ -f $work/curl.log ]] && sed 's/^/curl: /' "$work/curl.log"
+  return 0
+}
+caok=$infra/nginx/cloudflare-origin-pull-ca.pem
+live_cfg="server { listen 443 ssl; listen 8443 ssl; server_name a.example.test *.wild.example.test ~^re\\.example\\.test\$ _; ssl_verify_client on; ssl_client_certificate $caok; ssl_protocols TLSv1.2 TLSv1.3; }
+server { listen 9443 ssl; server_name only-wild.example.test; ssl_verify_client on; ssl_client_certificate $caok; }"
+live_out=$(live_net03 "$live_cfg" 400)
+# shellcheck disable=SC2317  # called through yes_if
+live_has() { [[ $live_out == *"$1"* ]]; }
+yes_if "live NET-03: a TLS listen that is not 443 is requested too (https://a.example.test:8443/ with --resolve for that port)" live_has 'curl: -sk --max-time 10 -o /dev/null -w %{http_code} --resolve a.example.test:8443:127.0.0.1 https://a.example.test:8443/'
+yes_if "live NET-03: port 443 is still requested as before" live_has 'curl: -sk --max-time 10 -o /dev/null -w %{http_code} --resolve a.example.test:443:127.0.0.1 https://a.example.test/'
+yes_if "live NET-03: the name on the third TLS port (9443) is requested" live_has '--resolve only-wild.example.test:9443:127.0.0.1 https://only-wild.example.test:9443/'
+yes_if "live NET-03: it says it did not test the wildcard name" live_has '*.wild.example.test on port 443'
+yes_if "live NET-03: it says it did not test the regular-expression name" live_has '~^re\.example\.test$ on port 443'
+yes_if "live NET-03: it says it did not test '_'" live_has '_ on port 8443'
+yes_if "live NET-03: and the line is still a PASS that says what was NOT TESTED LIVE" live_has 'PASS NET-03 all 2 TLS sites require Cloudflare'"'"'s client certificate; a request without one is refused on all 3 host name and port pairs. NOT TESTED LIVE'
+live_out=$(live_net03 "$live_cfg" 200)
+yes_if "live NET-03 fails when a non-443 TLS listen does not refuse a request without the certificate (answers 200)" live_has 'FAIL NET-03 a request without Cloudflare'"'"'s client certificate was not refused: [a.example.test on port 443 answered 200 to a request without a client certificate] [a.example.test on port 8443 answered 200'
+live_cfg2="server { listen 443 ssl; server_name a.example.test; ssl_verify_client on; ssl_client_certificate $caok; ssl_protocols TLSv1.2 TLSv1.3; }"
+live_out=$(live_net03 "$live_cfg2" 400)
+yes_if "live NET-03: a configuration with only plain names says nothing is skipped (positive control: no NOT TESTED text)" bash -c "[[ \$1 == *'PASS NET-03 all 1 TLS sites'* && \$1 != *'NOT TESTED'* ]]" _ "$live_out"
+live_cfg3="server { listen 8443 ssl; server_name *.wild.example.test; ssl_verify_client on; ssl_client_certificate $caok; }"
+live_out=$(live_net03 "$live_cfg3" 400)
+yes_if "live NET-03: when no name at all can be requested it FAILs and names what it skipped" live_has 'FAIL NET-03 no TLS host name could be tested live; skipped: [*.wild.example.test on port 8443'
 
 # --- VERIFY_CONTAINER=1 on a real host must not quietly skip the live checks ---
 realhost_made=0

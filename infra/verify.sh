@@ -14,6 +14,9 @@
 #                         read the written configuration instead of live state, and the
 #                         checks marked (kernel) print SKIP.
 #   VERIFY_DEBUG=1        show the error output of the commands the checks run.
+#   VERIFY_ONLY="ID ..."  run only the checks with these ids (for example: VERIFY_ONLY="NET-03 NGX-01").
+#                         The tests use it to run one check after one deliberate change; a real
+#                         verification runs them all.
 set -uo pipefail
 export LC_ALL=C
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -92,9 +95,20 @@ sshd_val() { awk -v k="$1" '$1 == k {$1 = ""; sub(/^ /, ""); v = (v == "" ? $0 :
 # sshd_val_user USER KEY: the value of KEY for that user (a Match block may differ from the global one).
 sshd_val_user() { awk -v k="$2" '$1 == k {$1 = ""; sub(/^ /, ""); v = (v == "" ? $0 : v " " $0)} END {print v}' <<<"${SSHD_T_USER[$1]:-}"; }
 
-# nginx_servers: reads `nginx -T` and prints one line per server block, then one summary line:
-#   S|names|ssl|default|reject|verify_client|client_certificate|ssl_protocols
-#   T|ssl_listens_in_servers|listens_outside_servers|ssl_listens_outside_servers|unreadable
+# nginx_servers: reads `nginx -T` and prints, in this order, a D line for every use of a few
+# directives (anywhere: http, server, location, if), then one S line per server block, then one
+# summary line:
+#   D|directive|arguments                      (server_tokens, client_max_body_size, client_body_timeout, client_header_timeout)
+#   S|names|ssl|default|reject|verify_client|client_certificate|ssl_protocols|tls_ports|own_ssl
+#   T|ssl_listens_in_servers|listens_outside_servers|ssl_listens_outside_servers|unreadable|ssl_directives
+# ssl is 1 when the server is served over TLS: its own listen has ssl or quic, or it says
+# "ssl on", OR another server listens on the same port with ssl. Nginx turns TLS on for every
+# server of a listening socket when one of them says ssl, so a server that does not say it
+# can still be one; the check treats every server on such a port (whatever the address) as TLS.
+# own_ssl is 1 when the server says ssl itself. tls_ports are the ports (or unix: sockets) of
+# the server's listens that are TLS, space separated. ssl_directives counts every "ssl"
+# directive anywhere, whatever its value: that is the old way to switch TLS on (for one server,
+# or for all of them from the http level), and NET-03 refuses it.
 # It is a port of Nginx's own tokenizer (ngx_conf_read_token), because a reader that differs
 # from Nginx in one rule can be made to skip a server. The rules that matter:
 #   - a quote or # is special only at the START of a word ("a'b" is one word; so is a#b);
@@ -104,10 +118,11 @@ sshd_val_user() { awk -v k="$2" '$1 == k {$1 = ""; sub(/^ /, ""); v = (v == "" ?
 #   - a quoted word must be followed by a space, ; or { (anything else is an error), except
 #     that a ) after it is the first character of the next word;
 #   - a word ends at a space, ; or {.
-# A server is TLS if a listen has ssl or quic, or it says "ssl on". Only directives written
-# directly in the server block count, not those in locations. "unreadable" is 1 when the text
-# is not something Nginx itself would accept (unbalanced braces, an open quote, a ; with no
-# directive, ...), and NET-03 then fails.
+# Only directives written directly in the server block count for that server, not those in
+# locations. Values of on/off directives are compared without regard to case (Nginx does the
+# same). A listen whose address this parser cannot place on a port makes the text "unreadable",
+# as does any text that is not something Nginx itself would accept (unbalanced braces, an open
+# quote, a ; with no directive, ...), and NET-03 then fails.
 NGINX_AWK=""
 read -r -d '' NGINX_AWK <<'AWK' || true
 function isws(c) { return c == " " || c == "\t" || c == "\r" || c == "\n" }
@@ -134,8 +149,28 @@ function join(from,   i, r) {
   return r
 }
 function reset_state() { lastspace = 1; need_space = 0; variable = 0; dq = 0; sq = 0; quoted = 0; raw = "" }
-function directive(   name, i, has_ssl, has_def) {
+# listen_key(arg): the port a listen address is on (what Nginx shares between servers), as a
+# number, or the whole "unix:..." address, or "" when the address is not one this parser places.
+# Only a port counts: 127.0.0.1:443, *:443, [::]:443 and 443 are all port 443; an address with no
+# port is port 80.
+function listen_key(a,   n) {
+  if (a ~ /^unix:/) return a
+  if (a ~ /^[0-9]+-[0-9]+$/) return ""
+  if (a ~ /^[0-9]+$/) { n = a + 0; return n "" }
+  if (a ~ /^\[[0-9A-Fa-f:.]+\]:[0-9]+$/) { sub(/^.*\]:/, "", a); n = a + 0; return n "" }
+  if (a ~ /^\[[0-9A-Fa-f:.]+\]$/) return "80"
+  if (a ~ /^[^:\[\]]*:[0-9]+$/) { sub(/^.*:/, "", a); n = a + 0; return n "" }
+  if (a ~ /^[^:\[\]]+$/) return "80"
+  return ""
+}
+function add_port(k) { if (index(" " s_ports " ", " " k " ") == 0) s_ports = (s_ports == "" ? k : s_ports " " k) }
+function directive(   name, lname, i, has_ssl, has_def, k) {
   name = w[0]
+  lname = tolower(name)
+  if (lname == "ssl") ssl_directives++
+  if (name == "server_tokens" || name == "client_max_body_size" || name == "client_body_timeout" || name == "client_header_timeout") {
+    print "D|" name "|" join(1)
+  }
   if (name == "listen") {
     has_ssl = 0; has_def = 0
     for (i = 1; i < nw; i++) {
@@ -143,6 +178,12 @@ function directive(   name, i, has_ssl, has_def) {
       if (w[i] == "default_server") has_def = 1
     }
     if (srv > 0) {
+      k = listen_key(w[1])
+      if (k == "") bad = 1
+      else {
+        add_port(k)
+        if (has_ssl) port_ssl[k] = 1
+      }
       if (has_ssl) { s_ssl = 1; srv_ssl_listens++ }
       if (has_def) s_def = 1
     } else {
@@ -153,27 +194,42 @@ function directive(   name, i, has_ssl, has_def) {
   }
   if (srv > 0 && depth == srv) {
     if (name == "server_name") s_names = (s_names == "" ? join(1) : s_names " " join(1))
-    else if (name == "ssl_reject_handshake") { if (w[1] == "on") s_rej = 1 }
+    else if (name == "ssl_reject_handshake") { if (tolower(w[1]) == "on") s_rej = 1 }
     else if (name == "ssl_verify_client") s_ver = w[1]
     else if (name == "ssl_client_certificate") s_cc = w[1]
     else if (name == "ssl_protocols") s_proto = join(1)
-    else if (name == "ssl") { if (w[1] == "on") s_ssl = 1 }
+    else if (lname == "ssl") { if (tolower(w[1]) == "on") s_ssl = 1 }
   }
 }
 function open_block() {
   depth++
   if (srv == 0 && nw == 1 && w[0] == "server") {
     srv = depth
-    s_names = ""; s_ssl = 0; s_def = 0; s_rej = 0; s_ver = ""; s_cc = ""; s_proto = ""
+    s_names = ""; s_ssl = 0; s_def = 0; s_rej = 0; s_ver = ""; s_cc = ""; s_proto = ""; s_ports = ""
   }
 }
+# A server is kept until the end of the text: whether it is TLS depends on the other servers.
 function close_block() {
   if (depth <= 0) { bad = 1; return }
   if (srv > 0 && depth == srv) {
-    print "S|" s_names "|" s_ssl "|" s_def "|" s_rej "|" s_ver "|" s_cc "|" s_proto
+    nsrv++
+    k_names[nsrv] = s_names; k_ssl[nsrv] = s_ssl; k_def[nsrv] = s_def; k_rej[nsrv] = s_rej
+    k_ver[nsrv] = s_ver; k_cc[nsrv] = s_cc; k_proto[nsrv] = s_proto
+    # a server with no listen at all listens on port 80
+    k_ports[nsrv] = (s_ports == "" ? "80" : s_ports)
     srv = 0
   }
   depth--
+}
+function print_servers(   i, j, n, pk, eff, tlsp) {
+  for (i = 1; i <= nsrv; i++) {
+    n = split(k_ports[i], pk, " ")
+    eff = k_ssl[i]; tlsp = ""
+    for (j = 1; j <= n; j++) {
+      if (port_ssl[pk[j]]) { eff = 1; tlsp = (tlsp == "" ? pk[j] : tlsp " " pk[j]) }
+    }
+    print "S|" k_names[i] "|" eff "|" k_def[i] "|" k_rej[i] "|" k_ver[i] "|" k_cc[i] "|" k_proto[i] "|" tlsp "|" k_ssl[i]
+  }
 }
 # A statement ends at ; or { . With no words in it, Nginx refuses the file.
 function stmt(kind) {
@@ -227,7 +283,8 @@ BEGIN { reset_state() }
 }
 END {
   if (depth != 0 || nw != 0 || dq || sq || quoted || !lastspace) bad = 1
-  print "T|" (srv_ssl_listens + 0) "|" (orphan + 0) "|" (orphan_ssl + 0) "|" (bad + 0)
+  print_servers()
+  print "T|" (srv_ssl_listens + 0) "|" (orphan + 0) "|" (orphan_ssl + 0) "|" (bad + 0) "|" (ssl_directives + 0)
 }
 AWK
 nginx_servers() { "$AWK" "$NGINX_AWK"; }
@@ -243,6 +300,11 @@ nginx_tls_listen_count() {
 }
 nginx_quoted_listen_count() {
   nginx_listen_stmts "$1" | grep -c "[\"']" || true
+}
+# A third count, again by plain text: the statements that start with the word ssl (the old
+# "ssl on;"), quoted or not. The parser's count of "ssl" directives must agree with it.
+nginx_ssl_directive_count() {
+  printf '%s\n' "$1" | sed 's/[[:space:]]*#.*$//' | grep -oE "(^|[;{}])[[:space:]]*[\"']?ssl[\"']?[[:space:]]" | wc -l | tr -d '[:space:]'
 }
 
 # --- SSH ---------------------------------------------------------------------------
@@ -723,22 +785,22 @@ check_net_02() {
 
 # nginx_parse_summary: the counts from the T| line of nginx_servers (used by NET-03).
 nginx_parse_summary() {
-  # Sets: NS_UNBALANCED NS_ORPHAN_SSL NS_PARSED_SSL, from the T| line.
+  # Sets: NS_UNBALANCED NS_ORPHAN_SSL NS_PARSED_SSL NS_SSL_DIRECTIVES, from the T| line.
   local t
   t=$(grep '^T|' <<<"$NGINX_SERVERS" | head -n 1)
-  IFS='|' read -r _ NS_PARSED_SSL _ NS_ORPHAN_SSL NS_UNBALANCED <<<"$t"
+  IFS='|' read -r _ NS_PARSED_SSL _ NS_ORPHAN_SSL NS_UNBALANCED NS_SSL_DIRECTIVES <<<"$t"
 }
 
 check_net_03() {
-  local line type names ssl rej ver cc proto n=0 bad="" name tested=0 code indep quoted
-  local NS_PARSED_SSL=0 NS_ORPHAN_SSL=0 NS_UNBALANCED=0
+  local line type names ssl rej ver cc proto ports own n=0 bad="" name tested=0 code indep quoted sslcount p url skipped="" why
+  local NS_PARSED_SSL=0 NS_ORPHAN_SSL=0 NS_UNBALANCED=0 NS_SSL_DIRECTIVES=0
   if [[ -z $NGINX_SERVERS ]]; then
     fail "cannot read the Nginx configuration (is nginx installed and does nginx -T pass?)"
     return 0
   fi
   nginx_parse_summary
   if [[ ${NS_UNBALANCED:-1} != 0 ]]; then
-    fail "the Nginx configuration could not be read reliably (unbalanced braces or quotes), so TLS cannot be vouched for"
+    fail "the Nginx configuration could not be read reliably (unbalanced braces or quotes, or a listen address this check cannot place on a port), so TLS cannot be vouched for"
     return 0
   fi
   [[ ${NS_ORPHAN_SSL:-0} == 0 ]] || bad+=" [${NS_ORPHAN_SSL} TLS listen directive(s) outside any server block]"
@@ -750,15 +812,25 @@ check_net_03() {
   if [[ $indep -ne $((NS_PARSED_SSL + NS_ORPHAN_SSL)) ]]; then
     bad+=" [the configuration has $indep TLS listen statements but the parser accounted for $((NS_PARSED_SSL + NS_ORPHAN_SSL))]"
   fi
-  while IFS='|' read -r type names ssl _ rej ver cc proto; do
+  # The old "ssl on;" switches TLS on for a server whose listen says nothing about it, or for all
+  # of them from the http level, and Nginx reads its value without regard to case ("ssl ON;"). It
+  # is refused at every level and with every value; TLS is switched on with "listen ... ssl".
+  [[ ${NS_SSL_DIRECTIVES:-0} == 0 ]] || bad+=" [${NS_SSL_DIRECTIVES} 'ssl' directive(s): the old way to switch TLS on, which can make a server TLS that no listen says is, so it is not accepted; write 'listen ... ssl' instead]"
+  sslcount=$(nginx_ssl_directive_count "$NGINX_T")
+  if [[ $sslcount -ne ${NS_SSL_DIRECTIVES:-0} ]]; then
+    bad+=" [the configuration has $sslcount statements that start with 'ssl' but the parser accounted for ${NS_SSL_DIRECTIVES:-0} ssl directives]"
+  fi
+  while IFS='|' read -r type names ssl _ rej ver cc proto ports own; do
     [[ $type == S && $ssl == 1 && $rej == 0 ]] || continue
     n=$((n + 1))
-    if [[ $ver != on ]]; then
-      bad+=" [${names:-unnamed server}: ssl_verify_client '$ver']"
+    why=""
+    [[ $own == 1 ]] || why=" (TLS only because another server listens with ssl on the same port: ${ports:-80}; Nginx serves every server of that port over TLS)"
+    if [[ ${ver,,} != on ]]; then
+      bad+=" [${names:-unnamed server}: ssl_verify_client '$ver'$why]"
     elif [[ -z $cc || ! -f $cc ]]; then
-      bad+=" [${names:-unnamed server}: client certificate file missing]"
+      bad+=" [${names:-unnamed server}: client certificate file missing$why]"
     elif ! cmp -s -- "$cc" "$OC_INFRA_DIR/nginx/cloudflare-origin-pull-ca.pem"; then
-      bad+=" [${names:-unnamed server}: client CA differs from infra/nginx/cloudflare-origin-pull-ca.pem]"
+      bad+=" [${names:-unnamed server}: client CA differs from infra/nginx/cloudflare-origin-pull-ca.pem$why]"
     fi
   done <<<"$NGINX_SERVERS"
   if ((n == 0)); then
@@ -777,43 +849,78 @@ check_net_03() {
     fail "nginx is not running"
     return 0
   fi
-  # Live: every host name of every TLS site must refuse a request without the certificate.
-  while IFS='|' read -r type names ssl _ rej _ _ _; do
+  # Live: every host name of every TLS site, on every TLS port it listens on (not only 443), must
+  # refuse a request without the certificate. A name that cannot be requested by name (a wildcard,
+  # "_", a regular expression) is not tested here: it is listed in the result, so the check never
+  # silently covers less than it says.
+  while IFS='|' read -r type names ssl _ rej _ _ _ ports _; do
     [[ $type == S && $ssl == 1 && $rej == 0 ]] || continue
-    for name in $names; do
-      [[ $name =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || continue
-      tested=$((tested + 1))
-      code=$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' --resolve "$name:443:127.0.0.1" "https://$name/" 2>/dev/null)
-      [[ $code == 400 ]] || bad+=" [$name answered $code to a request without a client certificate]"
+    if [[ -z $names ]]; then
+      skipped+=" [an unnamed server (ports ${ports:-?}): it has no host name to request]"
+      continue
+    fi
+    for p in $ports; do
+      if [[ $p == unix:* ]]; then
+        skipped+=" [$names on $p: a unix socket is not requested over TCP]"
+        continue
+      fi
+      for name in $names; do
+        if [[ ! $name =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
+          skipped+=" [$name on port $p: a wildcard, '_' or regular-expression name cannot be requested by name]"
+          continue
+        fi
+        tested=$((tested + 1))
+        url="https://$name/"
+        [[ $p == 443 ]] || url="https://$name:$p/"
+        code=$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' --resolve "$name:$p:127.0.0.1" "$url" 2>/dev/null)
+        [[ $code == 400 ]] || bad+=" [$name on port $p answered $code to a request without a client certificate]"
+      done
     done
   done <<<"$NGINX_SERVERS"
   if ((tested == 0)); then
-    fail "no TLS host name could be tested live"
+    fail "no TLS host name could be tested live${skipped:+; skipped:$skipped}"
   elif [[ -n $bad ]]; then
     fail "a request without Cloudflare's client certificate was not refused:$bad"
   else
-    pass "all $n TLS sites require Cloudflare's client certificate; a request without one is refused on all $tested host names"
+    pass "all $n TLS sites require Cloudflare's client certificate; a request without one is refused on all $tested host name and port pairs${skipped:+. NOT TESTED LIVE (covered by the configuration check only):$skipped}"
   fi
 }
 
 check_ngx_01() {
-  local type names ssl rej ver cc proto p bad=""
+  local type names ssl rej ver cc proto p bad="" name val off=0 sizes=0 body=0 header=0
   if [[ -z $NGINX_SERVERS ]]; then
     fail "cannot read the Nginx configuration"
     return 0
   fi
-  while IFS='|' read -r type names ssl _ rej ver cc proto; do
+  while IFS='|' read -r type names ssl _ rej ver cc proto _; do
     [[ $type == S && $ssl == 1 ]] || continue
     [[ -n $proto ]] || bad+=" [${names:-unnamed server}: no ssl_protocols]"
     for p in $proto; do
       [[ $p == TLSv1.2 || $p == TLSv1.3 ]] || bad+=" [${names:-unnamed server}: allows $p]"
     done
   done <<<"$NGINX_SERVERS"
-  grep -Eq '^[[:space:]]*server_tokens[[:space:]]+off;' <<<"$NGINX_T" || bad+=" [server_tokens is not off]"
-  grep -Eq '^[[:space:]]*server_tokens[[:space:]]+(on|build);' <<<"$NGINX_T" && bad+=" [server_tokens is switched on somewhere]"
-  grep -Eq '^[[:space:]]*client_max_body_size[[:space:]]+30m;' <<<"$NGINX_T" || bad+=" [client_max_body_size 30m missing]"
-  grep -Eq '^[[:space:]]*client_body_timeout[[:space:]]' <<<"$NGINX_T" || bad+=" [client_body_timeout missing]"
-  grep -Eq '^[[:space:]]*client_header_timeout[[:space:]]' <<<"$NGINX_T" || bad+=" [client_header_timeout missing]"
+  # The tokenizer reports every use of these directives, wherever it stands in the text (a
+  # one-line server, after a ; or a {, in a location): a search for them at the start of a line
+  # would miss one that is not. Values are compared without regard to case, as Nginx reads them.
+  while IFS='|' read -r type name val; do
+    [[ $type == D ]] || continue
+    case $name in
+      server_tokens)
+        if [[ ${val,,} == off ]]; then off=$((off + 1)); else bad+=" [server_tokens is '$val' somewhere: it must be off everywhere]"; fi
+        ;;
+      client_max_body_size)
+        sizes=$((sizes + 1))
+        [[ ${val,,} == 30m ]] || bad+=" [client_max_body_size is '$val' somewhere: the limit is 30m everywhere]"
+        ;;
+      client_body_timeout) body=1 ;;
+      client_header_timeout) header=1 ;;
+      *) ;;
+    esac
+  done <<<"$NGINX_SERVERS"
+  ((off > 0)) || bad+=" [server_tokens is not off]"
+  ((sizes > 0)) || bad+=" [client_max_body_size 30m missing]"
+  ((body > 0)) || bad+=" [client_body_timeout missing]"
+  ((header > 0)) || bad+=" [client_header_timeout missing]"
   if [[ -n $bad ]]; then
     fail "Nginx limits or TLS settings are wrong:$bad"
   else
@@ -1889,6 +1996,10 @@ main() {
   fi
   load_facts
   for entry in "${CHECKS[@]}"; do
+    # VERIFY_ONLY="ID ..." runs just those checks (the tests use it to run one check after one change).
+    if [[ -n ${VERIFY_ONLY:-} ]] && ! word_in "$VERIFY_ONLY" "${entry%% *}"; then
+      continue
+    fi
     run_check "${entry%% *}" "${entry#* }"
   done
   printf 'SUMMARY pass=%d fail=%d warn=%d skip=%d\n' "$N_PASS" "$N_FAIL" "$N_WARN" "$N_SKIP"
