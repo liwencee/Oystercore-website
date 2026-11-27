@@ -237,6 +237,12 @@ jobs:
             -- "oc-deploy@$DEPLOY_HOST" "$SHA $CMS_ID $WEB_ID" <images.tar.gz
           echo "deployed $SHA to $TARGET"
 
+      # The step above removes the key file itself, by an EXIT trap. If that shell never got to run
+      # its trap (the runner killed it, the run was cancelled), this step still runs, and removes it.
+      - name: Remove the key file
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP"/deploy-ssh.*
+
   deploy-production:
     name: Deploy to production
     needs: build
@@ -298,3 +304,9 @@ jobs:
             -i "$keydir/key" -p "$DEPLOY_SSH_PORT" \
             -- "oc-deploy@$DEPLOY_HOST" "$SHA $CMS_ID $WEB_ID" <images.tar.gz
           echo "deployed $SHA to $TARGET"
+
+      # The step above removes the key file itself, by an EXIT trap. If that shell never got to run
+      # its trap (the runner killed it, the run was cancelled), this step still runs, and removes it.
+      - name: Remove the key file
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP"/deploy-ssh.*

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests the server setup in a throwaway Ubuntu 24.04 container.
 #
-#   bash infra/test/run.sh               full run: bootstrap twice, verify, idempotence, extras
+#   bash infra/test/run.sh               full run: the workflow checks (on the host), then bootstrap twice, verify,
+#                                        idempotence, extras
 #   bash infra/test/run.sh verify-only   verify.sh on a bare system: every check must FAIL
 #   bash infra/test/run.sh shellcheck    shellcheck on every script, in the container
 #
@@ -34,6 +35,13 @@ docker info >/dev/null 2>&1 || {
   printf 'the Docker daemon is not running\n' >&2
   exit 1
 }
+
+# The workflow checks (every action pinned to a commit, the key file removed in an always() step) read
+# .github/workflows, which the test container does not have, so they run here, on the host.
+if [[ $mode == full ]]; then
+  printf '==> checking the workflows\n'
+  bash "$infra/deploy/workflow.test.sh"
+fi
 
 cd "$infra"
 printf '==> building %s\n' "$image"
