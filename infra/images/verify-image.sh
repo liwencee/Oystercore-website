@@ -313,29 +313,53 @@ check_forbidden
 # path has an esbuild component is read, because a binary can be renamed or moved inside the
 # package; the file counts when it starts with the ELF magic bytes. A JavaScript wrapper called
 # esbuild is not an ELF and does not count.
+# A check that cannot read what it must read does not pass: the files that should be there are
+# counted from the archive's own listing (a regular file is `-`, a hard link `h`, in `tar -tv`),
+# and the check fails when tar reports an error or fewer files were extracted and read.
 check_esbuild() {
-  local f magic found='' n=0
+  local f magic found='' n=0 expected=0 tar_rc=0 list_rc=0 problem=''
   if ((!fs_ok)); then
     fail esbuild 'the filesystem could not be listed'
     return
   fi
-  grep -E '(^|/)[^/]*esbuild[^/]*(/|$)' "$work/list.txt" | grep -v '/$' >"$work/esbuild.list" || true
-  if [[ -s $work/esbuild.list ]]; then
+  : >"$work/esbuild.err"
+  # The long listing has the same entries in the same order as list.txt, so line N of one is the
+  # long form of line N of the other and its first letter is the entry's type: - a regular file,
+  # h a hard link, l a symbolic link, d a folder. Only files and hard links are asked for (a
+  # symbolic link holds no content, and tar cannot always make one: its target may be elsewhere).
+  tar -tvf "$work/fs.tar" >"$work/list.tv" 2>>"$work/esbuild.err" || list_rc=$?
+  if [[ $(wc -l <"$work/list.tv") -ne $(wc -l <"$work/list.txt") ]]; then
+    list_rc=1
+    printf 'the long and the short listing of the archive have different numbers of entries\n' >>"$work/esbuild.err"
+  fi
+  awk 'NR == FNR { type[FNR] = substr($0, 1, 1); next }
+    (type[FNR] == "-" || type[FNR] == "h") && $0 ~ "(^|/)[^/]*esbuild[^/]*(/|$)"' \
+    "$work/list.tv" "$work/list.txt" >"$work/esbuild.list"
+  expected=$(wc -l <"$work/esbuild.list" | tr -d ' ')
+  if ((list_rc || expected > 0)); then
     mkdir "$work/esbuild"
-    # A link that cannot be made here is not a file to read; whatever tar says goes to a file.
-    tar -xf "$work/fs.tar" -C "$work/esbuild" --no-same-owner -T "$work/esbuild.list" 2>"$work/esbuild.err" || true
+    if ((expected > 0)); then
+      tar -xf "$work/fs.tar" -C "$work/esbuild" --no-same-owner -T "$work/esbuild.list" 2>>"$work/esbuild.err" || tar_rc=$?
+    fi
     while IFS= read -r f; do
       [[ -f $work/esbuild/$f && ! -L $work/esbuild/$f ]] || continue
       n=$((n + 1))
       magic=$(head -c 4 "$work/esbuild/$f" | od -An -tx1 | tr -d ' \n')
       if [[ $magic == 7f454c46 ]]; then found+="$f"$'\n'; fi
     done <"$work/esbuild.list"
+    if ((list_rc || tar_rc || n < expected)); then
+      problem="could not read the esbuild files: $n of $expected files extracted and read (tar exit $list_rc when listing, $tar_rc when extracting)"
+    fi
   fi
-  if [[ -z $found ]]; then
-    pass esbuild "no ELF binary among the $n files under an esbuild path"
-  else
+  if [[ -n $problem ]]; then
+    fail esbuild "$problem"
+    sed -n '1,10p' "$work/esbuild.err" | indent
+  fi
+  if [[ -n $found ]]; then
     fail esbuild "$(printf '%s' "$found" | wc -l | tr -d ' ') ELF binary(ies) under an esbuild path, for example:"
     printf '%s' "$found" | sed -n '1,10p' | indent
+  elif [[ -z $problem ]]; then
+    pass esbuild "no ELF binary among the $n files under an esbuild path"
   fi
 }
 check_esbuild

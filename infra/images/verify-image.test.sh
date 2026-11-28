@@ -144,13 +144,52 @@ exec "$SHIM_REAL_DOCKER" "${args[@]}"
 SHIM
 chmod +x "$work/shim/docker"
 
-# run_verifier_shim ARGS...: run_verifier, with the stand-in in front. SHIM_* and OC_VERIFY_*
+# A stand-in for `tar`, next to the one for docker, for the esbuild check (it extracts a few files
+# from the exported filesystem and reads them). It passes everything on to the real tar, except
+# the extraction (`tar -xf`), which SHIM_TAR_MODE spoils the two ways it can go wrong:
+#   fail    tar says "Cannot hard link", extracts nothing and exits 2;
+#   short   tar extracts everything and exits 0, but one extracted file is gone afterwards (as if
+#           it had never landed on disk).
+# An image cannot cause either; a verifier that treats "could not read" as "nothing found" would
+# pass an image that has an esbuild binary in it.
+real_tar=$(command -v tar)
+cat >"$work/shim/tar" <<'SHIM'
+#!/usr/bin/env bash
+set -u
+extract=0 dir=''
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case ${args[i]} in
+    -xf) extract=1 ;;
+    -C) dir=${args[i + 1]:-} ;;
+  esac
+done
+if ((extract)); then
+  case ${SHIM_TAR_MODE:-pass} in
+    fail)
+      printf "tar: esbuild/bin/esbuild: Cannot hard link to 'app/other/esbuild': No such file or directory\n" >&2
+      exit 2
+      ;;
+    short)
+      "$SHIM_REAL_TAR" "$@"
+      rc=$?
+      first=$(find "$dir" -type f | sed -n '1p')
+      [[ -z $first ]] || rm -f "$first"
+      exit "$rc"
+      ;;
+  esac
+fi
+exec "$SHIM_REAL_TAR" "$@"
+SHIM
+chmod +x "$work/shim/tar"
+
+# run_verifier_shim ARGS...: run_verifier, with the stand-ins in front. SHIM_* and OC_VERIFY_*
 # settings put before the call reach it.
 run_verifier_shim() {
   rc=0
   : >"$shimlog"
   rm -f "$shimenv"
-  out=$(PATH="$work/shim:$PATH" SHIM_REAL_DOCKER=$real_docker SHIM_LOG=$shimlog SHIM_ENV_COPY=$shimenv \
+  out=$(PATH="$work/shim:$PATH" SHIM_REAL_DOCKER=$real_docker SHIM_REAL_TAR=$real_tar SHIM_LOG=$shimlog SHIM_ENV_COPY=$shimenv \
     OC_VERIFY_START_TIMEOUT=20 bash "$verifier" "$@" 2>&1) || rc=$?
 }
 
@@ -396,6 +435,25 @@ expect_text '2 ELF binary(ies) under an esbuild path'
 for name in '@esbuild/linux-x64/bin/esbuild' 'esbuild/lib/helper.bin'; do
   if grep -qE "^ +\| .*$name" <<<"$out"; then ok "esbuild lists $name"; else notok "esbuild does not list $name"; fi
 done
+
+# A check that cannot read the files it must read does not pass. With the extraction spoiled
+# (the stand-in for tar, above), the same image, which really has two esbuild binaries, must
+# fail `esbuild` and say it could not read them, and show tar's own message; an extraction that
+# exits 0 but lost a file (the count from the archive's listing is what notices) must fail too.
+# The control is the look-alike image (one JavaScript file under an esbuild path) through the same
+# stand-ins, with the extraction left alone: it still passes.
+SHIM_TAR_MODE=fail run_verifier_shim oc-verify-test-esbuild-elf:test web
+expect_exit 1
+expect_line 'FAIL esbuild'
+expect_text 'could not read the esbuild files: 0 of 2 files extracted and read (tar exit 0 when listing, 2 when extracting)'
+expect_text 'Cannot hard link'
+SHIM_TAR_MODE=short run_verifier_shim oc-verify-test-esbuild-elf:test web
+expect_exit 1
+expect_line 'FAIL esbuild'
+expect_text 'could not read the esbuild files: 1 of 2 files extracted and read (tar exit 0 when listing, 0 when extracting)'
+SHIM_TAR_MODE=pass run_verifier_shim oc-verify-test-lookalikes:test web
+expect_exit 0
+expect_line 'PASS esbuild   no ELF binary among the 1 files under an esbuild path'
 
 # The size limit: the same good image, under a limit that is too small.
 OC_VERIFY_MAX_BYTES=1000000 run_verifier oc-verify-test-good:test web
