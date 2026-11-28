@@ -66,7 +66,7 @@ run_verifier() {
     ((seen)) || notok "run_verifier was given $1, which this test never pulled: it would pass only where that image is already cached"
   fi
   rc=0
-  out=$(OC_VERIFY_START_TIMEOUT=20 bash "$verifier" "$@" 2>&1) || rc=$?
+  out=$(OC_VERIFY_START_TIMEOUT=20 OC_VERIFY_MIN_PACKAGES="${OC_VERIFY_MIN_PACKAGES-0}" bash "$verifier" "$@" 2>&1) || rc=$?
 }
 
 # expect_line TEXT: the verifier's output must contain a line that starts with TEXT.
@@ -190,7 +190,7 @@ run_verifier_shim() {
   : >"$shimlog"
   rm -f "$shimenv"
   out=$(PATH="$work/shim:$PATH" SHIM_REAL_DOCKER=$real_docker SHIM_REAL_TAR=$real_tar SHIM_LOG=$shimlog SHIM_ENV_COPY=$shimenv \
-    OC_VERIFY_START_TIMEOUT=20 bash "$verifier" "$@" 2>&1) || rc=$?
+    OC_VERIFY_START_TIMEOUT=20 OC_VERIFY_MIN_PACKAGES="${OC_VERIFY_MIN_PACKAGES-0}" bash "$verifier" "$@" 2>&1) || rc=$?
 }
 
 # shim_lines PREFIX / shim_env_database: what the shim saw, on one line, for a failure message.
@@ -435,22 +435,69 @@ expect_text 'read 2 package.json files; 0 reference(s) into a test folder, 2 kno
 
 # Entry points into a test folder, which the Dockerfiles remove: every field the check reads, a
 # scoped package and a path without "./". The image has no test folder (it is as the prune leaves
-# it), so only the package.json files say that something is gone. A package that is not on the
-# known list but uses the known path ("other", "./dist/test/index.js") must fail too.
+# it), so only the package.json files say that something is gone. The known list is exact (package,
+# field and path): a package that is not on it but uses a known path ("other"), and the known
+# package with another path or in another field ("ai": ./dist/test/other.js, and bin ->
+# ./dist/test/index.js) must fail too.
+printf '{"name":"ai","version":"6.0.1","exports":{"./test":"./dist/test/other.js"},"bin":"./dist/test/index.js"}\n' >"$work/ctx/ai-wrong-package.json"
 {
   printf 'FROM %s\nCOPY server.mjs healthcheck.mjs /app/\nWORKDIR /app\nUSER 65532:65532\n' "$distroless13"
   printf 'COPY broken-package.json /app/node_modules/broken/package.json\n'
   printf 'COPY scoped-package.json /app/node_modules/@scope/scoped/package.json\n'
+  printf 'COPY ai-wrong-package.json /app/node_modules/ai/package.json\n'
   printf 'COPY other-package.json /app/node_modules/other/package.json\nCMD ["/app/server.mjs"]\n'
 } | build entrypoints
 run_verifier oc-verify-test-entrypoints:test web
 expect_exit 1
 expect_line 'FAIL entrypoints'
-expect_text '(read 3 package.json files; 6 reference(s) into a test folder, 0 known test helper export(s) not counted)'
-for name in 'broken@1.0.0: main -> ./test/index.js' 'broken@1.0.0: bin -> ./tests/cli.js' 'broken@1.0.0: exports -> ./__tests__/util.mjs' 'broken@1.0.0: files -> test' '@scope/scoped@2.0.0: module -> dist/__tests__/m.js' 'other@?: exports -> ./dist/test/index.js'; do
+expect_text '(read 4 package.json files; 8 reference(s) into a test folder, 0 known test helper export(s) not counted)'
+for name in 'broken@1.0.0: main -> ./test/index.js' 'broken@1.0.0: bin -> ./tests/cli.js' 'broken@1.0.0: exports -> ./__tests__/util.mjs' 'broken@1.0.0: files -> test' '@scope/scoped@2.0.0: module -> dist/__tests__/m.js' 'other@?: exports -> ./dist/test/index.js' 'ai@6.0.1: exports -> ./dist/test/other.js' 'ai@6.0.1: bin -> ./dist/test/index.js'; do
   if grep -qF "$name" <<<"$out"; then ok "entrypoints lists $name"; else notok "entrypoints does not list $name"; fi
 done
 expect_line 'PASS forbidden'
+
+# A scan that cannot read does not pass; each of these must fail `entrypoints`, with the reason in
+# the text, not only the exit status (the check used to say "read 0 package.json files" and pass).
+# The floor is 0 in these runs unless the case sets it (the helpers above), because most test
+# images have no dependencies; the cases that test the floor itself leave it empty, which means the
+# verifier's own default (100 for the website, 400 for the CMS).
+#  (1) no /app/node_modules at all, the floor at its default: the good image has none.
+OC_VERIFY_MIN_PACKAGES='' run_verifier oc-verify-test-good:test web
+expect_exit 1
+expect_line 'FAIL entrypoints'
+expect_text 'cannot read the folder /app/node_modules: ENOENT'
+#  (2) one malformed (truncated) package.json among good ones.
+printf '{"name":"x","main":"./test/a.js",' >"$work/ctx/trunc-package.json"
+{
+  printf 'FROM %s\nCOPY server.mjs healthcheck.mjs /app/\nWORKDIR /app\nUSER 65532:65532\n' "$distroless13"
+  printf 'COPY fine-package.json /app/node_modules/fine/package.json\n'
+  printf 'COPY trunc-package.json /app/node_modules/trunc/package.json\nCMD ["/app/server.mjs"]\n'
+} | build ep-badjson
+run_verifier oc-verify-test-ep-badjson:test web
+expect_exit 1
+expect_line 'FAIL entrypoints'
+expect_text 'the scan could not run (exit 2)'
+expect_text 'could not read or parse /app/node_modules/trunc/package.json'
+#  (3) a folder the process cannot list (mode 000, owned by another user; the image runs as 65532).
+{
+  printf 'FROM %s AS plant\nUSER node\nRUN mkdir -p /home/node/p/locked && chmod 000 /home/node/p/locked\n' "$node_slim"
+  printf 'FROM %s\nCOPY server.mjs healthcheck.mjs /app/\nWORKDIR /app\nUSER 65532:65532\n' "$distroless13"
+  printf 'COPY fine-package.json /app/node_modules/fine/package.json\n'
+  printf 'COPY --from=plant /home/node/p /app/node_modules\nCMD ["/app/server.mjs"]\n'
+} | build ep-locked
+run_verifier oc-verify-test-ep-locked:test web
+expect_exit 1
+expect_line 'FAIL entrypoints'
+expect_text 'cannot read the folder /app/node_modules/locked: EACCES'
+#  (4) fewer package.json files than the floor (the look-alike image has two): at the default floor
+#      it fails and says why; at a floor of exactly two it passes (the control, and the boundary).
+OC_VERIFY_MIN_PACKAGES='' run_verifier oc-verify-test-lookalikes:test web
+expect_exit 1
+expect_line 'FAIL entrypoints'
+expect_text 'only 2 package.json files under /app/node_modules, fewer than the floor of 100 for this kind of image'
+OC_VERIFY_MIN_PACKAGES=2 run_verifier oc-verify-test-lookalikes:test web
+expect_exit 0
+expect_line 'PASS entrypoints'
 
 # An esbuild binary: the ELF that esbuild's install script leaves at node_modules/esbuild/bin/esbuild
 # and the platform package's own, and one that was moved and renamed inside the package.

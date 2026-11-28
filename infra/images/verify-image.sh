@@ -44,6 +44,9 @@
 #                                   defaults are the dev credentials in docker-compose.dev.yml
 #   OC_VERIFY_START_TIMEOUT         seconds to wait for the health check (web 60, cms 150)
 #   OC_VERIFY_MAX_BYTES             overrides the size limit
+#   OC_VERIFY_MIN_PACKAGES          overrides the floor of the entrypoints check: the fewest
+#                                   package.json files the image must hold (web 100, cms 400);
+#                                   0 means "an image with no dependencies at all" (test images)
 set -euo pipefail
 
 # Git Bash on Windows would rewrite /nodejs/... and /tmp arguments for docker.exe.
@@ -64,6 +67,14 @@ readonly KEEP_ID_USER='20000:20000'
 readonly MAX_BYTES_WEB=417051648  # measured 278034432 (265 MiB) x 1.5
 readonly MAX_BYTES_CMS=1129378560 # measured 752919040 (718 MiB) x 1.5
 
+# The fewest package.json files the entrypoints check must find in an image, about a third of
+# what was measured (website 287, CMS 1266). It is a floor, not a count: it catches an image whose
+# dependencies are missing or moved, which would otherwise read as "nothing found", and it is far
+# enough below the real number that an ordinary dependency update cannot trip it. If an image
+# really does shrink below it (a large dependency removed), lower the number here in the same
+# commit and say why; if the image grows a lot, raising it is optional.
+readonly MIN_PACKAGES_WEB=100
+readonly MIN_PACKAGES_CMS=400
 die() {
   printf 'verify-image: %s\n' "$*" >&2
   exit 2
@@ -95,6 +106,7 @@ case $app in
     heap=384
     start_timeout=60
     max_bytes=$MAX_BYTES_WEB
+    min_packages=$MIN_PACKAGES_WEB
     ;;
   cms)
     port=1337
@@ -103,11 +115,13 @@ case $app in
     heap=1024
     start_timeout=150
     max_bytes=$MAX_BYTES_CMS
+    min_packages=$MIN_PACKAGES_CMS
     ;;
   *) usage ;;
 esac
 start_timeout=${OC_VERIFY_START_TIMEOUT:-$start_timeout}
 max_bytes=${OC_VERIFY_MAX_BYTES:-$max_bytes}
+min_packages=${OC_VERIFY_MIN_PACKAGES:-$min_packages}
 
 command -v docker >/dev/null 2>&1 || die 'docker is required'
 docker info >/dev/null 2>&1 || die 'the Docker daemon is not running'
@@ -375,23 +389,36 @@ check_esbuild
 # prune cannot tell, so this reads every package.json in the image (with the image's own Node;
 # the image has no shell) and fails on any such reference. (A package whose own folder is called
 # test, tests or __tests__ is removed whole and cannot be seen here; none exists.) It runs on every
-# image build in CI, so a dependency update
-# that adds such an entry fails there. Known references are listed in the script: they are test
-# helper subpath exports (`ai/test`, `@strapi/admin/strapi-admin/test`, ...), and each one was
-# checked, when the list was made, to be imported by nothing in the image (see the report of
-# task 4b-B, fix round 1). The list is exact (package, path); a new package or path fails.
+# image build in CI, so a dependency update that adds such an entry fails there. Known references
+# are listed in the script: they are test helper subpath exports (`ai/test`,
+# `@strapi/admin/strapi-admin/test`, ...), and each one was checked, when the list was made, to be
+# imported by nothing in the image (see the report of task 4b-B, fix round 1). The list is exact:
+# each entry is a package name, the package.json field and the whole path string, so a new
+# package, another field or another path fails.
+# A scan that cannot read does not pass. The script exits 2, and the check fails with the reason,
+# when the folder is missing (unless the floor is 0, an image with no dependencies at all) or any
+# folder cannot be listed, when any package.json cannot be read or parsed, and when it found fewer
+# package.json files than the floor (MIN_PACKAGES_WEB and _CMS above).
 read -r -d '' entrypoints_script <<'JS' || true
 const fs = require("fs");
 const path = require("path");
 const bad = /(^|\/)(test|tests|__tests__)(\/|$)/;
-// Known: test helper subpath exports that nothing in the image imports.
-const known = {
-  "@ai-sdk/provider-utils": /^\.\/dist\/test\/index\./,
-  "ai": /^\.\/dist\/test\/index\./,
-  "@strapi/admin": /^\.\/(dist\/)?admin\/tests\/index\./,
-  "asap": /^\.\/test\/browser-domain\.js$/,
-};
+// Known: test helper subpath exports that nothing in the image imports. Exact: "package|field|path".
+const known = new Set([
+  "@ai-sdk/provider-utils|exports|./dist/test/index.d.ts",
+  "@ai-sdk/provider-utils|exports|./dist/test/index.mjs",
+  "@ai-sdk/provider-utils|exports|./dist/test/index.js",
+  "ai|exports|./dist/test/index.d.ts",
+  "ai|exports|./dist/test/index.mjs",
+  "ai|exports|./dist/test/index.js",
+  "@strapi/admin|exports|./dist/admin/tests/index.d.ts",
+  "@strapi/admin|exports|./admin/tests/index.ts",
+  "asap|browser|./test/browser-domain.js",
+]);
+const root = process.argv[1];
+const floor = Number(process.argv[2]);
 const hits = [];
+const errors = [];
 let seen = 0;
 let allowed = 0;
 function strings(v, out) {
@@ -405,7 +432,10 @@ function check(file) {
   const isPackage = parent === "node_modules" || (parent.startsWith("@") && path.basename(path.dirname(path.dirname(dir))) === "node_modules");
   if (!isPackage) return;
   let j;
-  try { j = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
+  try { j = JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) {
+    errors.push("could not read or parse " + file + ": " + (e.code || e.message));
+    return;
+  }
   seen++;
   const name = j.name || path.basename(dir);
   const label = name + "@" + (j.version || "?");
@@ -414,14 +444,19 @@ function check(file) {
     strings(j[field], refs);
     for (const r of refs) {
       if (r.startsWith("!") || !bad.test(r.replace(/^\.\//, ""))) continue;
-      if (known[name] && known[name].test(r)) allowed++;
+      if (known.has(name + "|" + field + "|" + r)) allowed++;
       else hits.push(label + ": " + field + " -> " + r);
     }
   }
 }
 function walk(dir) {
   let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) {
+    // No dependencies folder at all is a fact about an image only when the floor says so (0).
+    if (dir === root && e.code === "ENOENT" && floor === 0) return;
+    errors.push("cannot read the folder " + dir + ": " + e.code);
+    return;
+  }
   for (const e of entries) {
     const p = path.join(dir, e.name);
     if (e.isSymbolicLink()) continue;
@@ -429,14 +464,23 @@ function walk(dir) {
     else if (e.name === "package.json") check(p);
   }
 }
-walk(process.argv[1]);
+walk(root);
+if (errors.length) {
+  for (const e of errors.slice(0, 5)) console.log(e);
+  console.log("not scanned: " + errors.length + " error(s) while reading " + root);
+  process.exit(2);
+}
+if (seen < floor) {
+  console.log("not scanned: only " + seen + " package.json files under " + root + ", fewer than the floor of " + floor + " for this kind of image");
+  process.exit(2);
+}
 for (const h of hits) console.log(h);
 console.log("read " + seen + " package.json files; " + hits.length + " reference(s) into a test folder, " + allowed + " known test helper export(s) not counted");
 process.exit(hits.length ? 1 : 0);
 JS
 check_entrypoints() {
   local out rc=0 last
-  out=$(docker run --rm --entrypoint "$NODE_BIN" "$image" -e "$entrypoints_script" /app/node_modules 2>&1) || rc=$?
+  out=$(docker run --rm --entrypoint "$NODE_BIN" "$image" -e "$entrypoints_script" /app/node_modules "$min_packages" 2>&1) || rc=$?
   last=${out##*$'\n'}
   if ((rc == 0)) && [[ $last == 'read '* ]]; then
     pass entrypoints "no package.json points into a test, tests or __tests__ folder: $last"
@@ -444,7 +488,7 @@ check_entrypoints() {
     fail entrypoints "a package.json points into a folder that the Dockerfile removes ($last):"
     printf '%s\n' "$out" | sed '$d' | sed -n '1,15p' | indent
   else
-    fail entrypoints "the scan could not run (exit $rc): $(printf '%s' "$out" | sed -n '1,3p' | tr '\n' ' ')"
+    fail entrypoints "the scan could not run (exit $rc): $(printf '%s\n' "$out" | sed -n '1,6p' | tr '\n' ' ')"
   fi
 }
 check_entrypoints
