@@ -104,17 +104,22 @@ trivyignore_problems() { # ROOT
 }
 
 # ---- 4. the MariaDB images are pinned by digest, one digest everywhere --------------------------------
-mariadb_problems() { # ROOT
-  local ci=$1/.github/workflows/ci.yml vi=$1/infra/images/verify-image.sh digests n
-  grep -nE '^[[:space:]]+image:[[:space:]]' "$ci" | grep -vE '@sha256:[0-9a-f]{64}' | sed 's/^/ci.yml: a service image is not pinned by digest: /' || true
-  grep -nE '^[^#]*mariadb:[0-9]' "$ci" | grep -vE '@sha256:[0-9a-f]{64}' | sed 's/^/ci.yml: a mariadb tag with no digest: /' || true
-  grep -nE -- 'ancestor=' "$ci" | sed 's/^/ci.yml: a container is found by its image name, which a digest pin changes: /' || true
-  grep -q 'job\.services\.mariadb\.id' "$ci" || echo 'ci.yml: the ci job does not find the MariaDB container through job.services.mariadb.id'
+mariadb_problems() { # ROOT: both workflows and the verifier
+  local vi=$1/infra/images/verify-image.sh wf name digests n
+  for name in ci.yml deploy.yml; do
+    wf=$1/.github/workflows/$name
+    grep -nE '^[[:space:]]+image:[[:space:]]' "$wf" | grep -vE '@sha256:[0-9a-f]{64}' | sed "s/^/$name: a service image is not pinned by digest: /" || true
+    grep -nE '^[^#]*mariadb:[0-9]' "$wf" | grep -vE '@sha256:[0-9a-f]{64}' | sed "s/^/$name: a mariadb tag with no digest: /" || true
+    grep -nE -- 'ancestor=' "$wf" | sed "s/^/$name: a container is found by its image name, which a digest pin changes: /" || true
+    # shellcheck disable=SC2016  # a pattern with the literal text of a workflow expression
+    grep -q 'MARIADB_CONTAINER: \${{ job\.services\.mariadb\.id }}' "$wf" || echo "$name: the MariaDB container is not found through job.services.mariadb.id passed in env: (MARIADB_CONTAINER)"
+    grep -nE 'docker exec.*\$\{\{' "$wf" | sed "s/^/$name: an expression is written into the shell command: /" || true
+  done
   grep -qE "db_client_image='[^']+@sha256:[0-9a-f]{64}'" "$vi" || echo 'verify-image.sh: db_client_image is not pinned by digest'
-  digests=$(grep -ohE 'mariadb:[0-9][0-9.]*@sha256:[0-9a-f]{64}' "$ci" "$vi" | sort -u)
+  digests=$(grep -ohE 'mariadb:[0-9][0-9.]*@sha256:[0-9a-f]{64}' "$1/.github/workflows/ci.yml" "$1/.github/workflows/deploy.yml" "$vi" | sort -u)
   n=$(printf '%s' "$digests" | grep -c . || true)
-  [[ $n -le 1 ]] || printf 'the MariaDB pins differ between ci.yml and verify-image.sh: %s\n' "$(printf '%s' "$digests" | tr '\n' ' ')"
-  [[ $n -ge 1 ]] || echo 'no mariadb:<tag>@sha256:<digest> pin found in ci.yml and verify-image.sh'
+  [[ $n -le 1 ]] || printf 'the MariaDB pins differ between ci.yml, deploy.yml and verify-image.sh: %s\n' "$(printf '%s' "$digests" | tr '\n' ' ')"
+  [[ $n -ge 1 ]] || echo 'no mariadb:<tag>@sha256:<digest> pin found in ci.yml, deploy.yml and verify-image.sh'
 }
 
 # ---- 5. the pnpm version carries its hash ----------------------------------------------------------------
@@ -304,11 +309,29 @@ sed -i "s|^readonly db_client_image=.*|readonly db_client_image='mariadb:11.4'|"
 some "a client image with no digest is noticed" "$(mariadb_problems "$C")" "db_client_image is not pinned by digest"
 fresh
 sed -i "0,/mariadb:11.4@sha256:[0-9a-f]\{64\}/s//mariadb:11.4@sha256:$(printf '0%.0s' {1..64})/" "$C/infra/images/verify-image.sh"
-some "two different digests are noticed" "$(mariadb_problems "$C")" "pins differ between ci.yml and verify-image.sh"
+some "two different digests are noticed" "$(mariadb_problems "$C")" "pins differ between ci.yml, deploy.yml and verify-image.sh"
 fresh
 # shellcheck disable=SC2016  # a sed expression: the $ signs are sed's, not the shell's
 sed -i 's|"\$MARIADB_CONTAINER"|"$(docker ps -q --filter ancestor=mariadb:11.4)"|' "$C/.github/workflows/ci.yml"
 some "finding the container by its image name is noticed" "$(mariadb_problems "$C")" "found by its image name"
+# the same four faults in deploy.yml (its build job has a MariaDB service of its own)
+fresh
+sed -i 's/image: mariadb:11.4@sha256:[0-9a-f]*/image: mariadb:11.4/' "$C/.github/workflows/deploy.yml"
+some "a service image with no digest is noticed (deploy.yml)" "$(mariadb_problems "$C")" "deploy.yml: a service image is not pinned by digest"
+fresh
+# shellcheck disable=SC2016  # a sed expression: the $ signs are sed's, not the shell's
+sed -i 's|"\$MARIADB_CONTAINER"|"$(docker ps -q --filter ancestor=mariadb:11.4)"|' "$C/.github/workflows/deploy.yml"
+some "finding the container by its image name is noticed (deploy.yml)" "$(mariadb_problems "$C")" "deploy.yml: a container is found by its image name"
+fresh
+sed -i "s/mariadb:11.4@sha256:[0-9a-f]\{64\}/mariadb:11.4@sha256:$(printf '0%.0s' {1..64})/" "$C/.github/workflows/deploy.yml"
+some "a deploy.yml digest that differs from ci.yml is noticed" "$(mariadb_problems "$C")" "pins differ between ci.yml, deploy.yml and verify-image.sh"
+fresh
+sed -i '/^          MARIADB_CONTAINER: /d' "$C/.github/workflows/deploy.yml"
+some "a deploy.yml without the job.services id in env: is noticed" "$(mariadb_problems "$C")" "deploy.yml: the MariaDB container is not found through job.services.mariadb.id passed in env:"
+fresh
+# shellcheck disable=SC2016  # a sed expression: the $ signs are sed's, not the shell's
+sed -i 's|"\$MARIADB_CONTAINER"|"${{ job.services.mariadb.id }}"|' "$C/.github/workflows/deploy.yml"
+some "an expression written into deploy.yml's shell command is noticed" "$(mariadb_problems "$C")" "deploy.yml: an expression is written into the shell command"
 
 # 5. packageManager
 fresh
@@ -353,7 +376,7 @@ fresh
 sed -i 's/^    image: mariadb:11.4$/    image: mariadb:11.8/' "$C/docker-compose.dev.yml"
 some "a file that names a mariadb tag the rule forbids is noticed (docker-compose.dev.yml)" "$(renovate_problems "$C")" "docker-compose.dev.yml names mariadb:11.8"
 fresh
-sed -i '0,/^        image: mariadb:11.4$/s//        image: mariadb:11.8/' "$C/.github/workflows/deploy.yml"
+sed -i '0,/^        image: mariadb:11.4@/s//        image: mariadb:11.8@/' "$C/.github/workflows/deploy.yml"
 some "a file that names a mariadb tag the rule forbids is noticed (deploy.yml)" "$(renovate_problems "$C")" "deploy.yml names mariadb:11.8"
 
 # 7. wording

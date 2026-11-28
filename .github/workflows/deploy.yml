@@ -65,7 +65,7 @@ jobs:
     services:
       # The tests and the CMS image check both use it, on the same host port as docker-compose.dev.yml.
       mariadb:
-        image: mariadb:11.4
+        image: mariadb:11.4@sha256:a8992b5e5404d11e03c54a31d0c1bdea3fd116d283aa6d1a627551f29045309b
         env:
           MARIADB_ROOT_PASSWORD: oc_ci_root
         ports:
@@ -91,10 +91,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # A service container cannot mount repo files, so run the dev init script inside it
-      # (the same step as in ci.yml).
+      # (the same step as in ci.yml). The container is found by the id GitHub gives the service,
+      # not by its image name: the name carries a digest, which Renovate changes in one place only.
       - name: Create databases
+        env:
+          MARIADB_CONTAINER: ${{ job.services.mariadb.id }}
         run: >-
-          docker exec -i "$(docker ps -q --filter ancestor=mariadb:11.4)"
+          docker exec -i "$MARIADB_CONTAINER"
           mariadb -uroot -poc_ci_root < docker/initdb/01-databases.sql
 
       - run: pnpm typecheck
