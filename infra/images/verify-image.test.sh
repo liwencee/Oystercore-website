@@ -485,7 +485,7 @@ expect_line 'FAIL esbuild'
 expect_text 'could not read the esbuild files: 1 of 2 files extracted and read (tar exit 0 when listing, 0 when extracting)'
 SHIM_TAR_MODE=pass run_verifier_shim oc-verify-test-lookalikes:test web
 expect_exit 0
-expect_line 'PASS esbuild   no ELF binary among the 1 files under an esbuild path'
+expect_line 'PASS esbuild  *no ELF binary among the 1 files under an esbuild path'
 
 # The size limit: the same good image, under a limit that is too small.
 OC_VERIFY_MAX_BYTES=1000000 run_verifier oc-verify-test-good:test web
