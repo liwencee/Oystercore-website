@@ -21,6 +21,12 @@
       "matchPackageNames": ["*"],
       "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
       "groupName": "weekly updates"
+    },
+    {
+      "description": "MariaDB stays on 11.4: the version the server runs (infra/bootstrap), CI tests against and docker-compose.dev.yml starts. For the docker versioning 11.4 to 11.8 is a minor update, which the weekly group would otherwise carry. The rule is by package name, so it covers every place Renovate reads the image: the services in ci.yml and deploy.yml, docker-compose.dev.yml, and the verifier's client image (the custom manager below). New builds of 11.4 (digest updates) still come through.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["mariadb", "docker.io/library/mariadb"],
+      "allowedVersions": "/^11\\.4(\\.|$)/"
     }
   ],
   "customManagers": [

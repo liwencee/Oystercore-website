@@ -174,6 +174,29 @@ for (const cm of managers) {
   }
 }
 if (!coversVerifier) problems.push("renovate.json: no custom manager reads the mariadb image that verify-image.sh runs as its database client, so its digest would never be bumped");
+
+// MariaDB stays on the 11.4 series (the server, CI and local dev run 11.4). The docker versioning
+// calls 11.4 -> 11.8 a minor update, which the weekly group would carry, so a package rule must
+// limit the versions Renovate may propose. The rule is applied to sample versions, and every file
+// that names the image must name a tag the rule allows (so the rule and the pins cannot drift).
+const mariaRules = (cfg.packageRules || []).filter((r) => (r.matchPackageNames || []).includes('mariadb') && typeof r.allowedVersions === 'string');
+if (mariaRules.length !== 1) problems.push('renovate.json: no package rule limits the mariadb image to the 11.4 series (allowedVersions); Renovate would move CI and local development to 11.8 or 12 in the weekly group');
+else {
+  const m = /^\/(.*)\/$/.exec(mariaRules[0].allowedVersions);
+  if (!m) problems.push(`renovate.json: the mariadb rule's allowedVersions ${JSON.stringify(mariaRules[0].allowedVersions)} is not a /regular expression/`);
+  else {
+    const re = new RegExp(m[1]);
+    for (const v of ['11.4', '11.4.13', '11.4.13-noble']) if (!re.test(v)) problems.push(`renovate.json: the mariadb rule rejects ${v}, which is in the 11.4 series`);
+    for (const v of ['11.8', '11.8.2', '11.5', '11.40', '12.0', '10.11', '111.4']) if (re.test(v)) problems.push(`renovate.json: the mariadb rule allows ${v}, which is not in the 11.4 series`);
+    if (!(mariaRules[0].matchDatasources || []).includes('docker')) problems.push('renovate.json: the mariadb rule does not name the docker datasource');
+    for (const f of ['.github/workflows/ci.yml', '.github/workflows/deploy.yml', 'docker-compose.dev.yml', 'infra/images/verify-image.sh']) {
+      const text = fs.readFileSync(path.join(root, f), 'utf8');
+      for (const t of text.matchAll(/mariadb:([0-9][A-Za-z0-9._-]*)/g)) {
+        if (!re.test(t[1])) problems.push(`renovate.json: ${f} names mariadb:${t[1]}, which the mariadb rule does not allow`);
+      }
+    }
+  }
+}
 for (const p of problems) console.log(p);
 JS
 }
@@ -220,7 +243,7 @@ fresh() { # a clean copy of everything the checks read
   rm -rf "$T/c"
   mkdir -p "$T/c/.github/workflows" "$T/c/apps/cms" "$T/c/apps/web" "$T/c/infra/images"
   cp "$ROOT/.github/workflows/ci.yml" "$ROOT/.github/workflows/deploy.yml" "$T/c/.github/workflows/"
-  cp "$ROOT/.trivyignore.yaml" "$ROOT/renovate.json" "$ROOT/package.json" "$T/c/"
+  cp "$ROOT/.trivyignore.yaml" "$ROOT/renovate.json" "$ROOT/package.json" "$ROOT/docker-compose.dev.yml" "$T/c/"
   cp "$ROOT/apps/cms/Dockerfile" "$T/c/apps/cms/"
   cp "$ROOT/apps/web/Dockerfile" "$T/c/apps/web/"
   cp "$ROOT/infra/images/verify-image.sh" "$T/c/infra/images/"
@@ -317,6 +340,21 @@ some "no manager for the verifier's database client image is noticed" "$(renovat
 fresh
 sed -i "s|^readonly db_client_image=.*|readonly db_client_image=\"mariadb\"|" "$C/infra/images/verify-image.sh"
 some "a manager that matches nothing in its file is noticed" "$(renovate_problems "$C")" "matches nothing in it"
+fresh
+edit_json "$C/renovate.json" 'c.packageRules = c.packageRules.filter((r) => !r.allowedVersions)'
+some "no rule keeping mariadb on the 11.4 series is noticed" "$(renovate_problems "$C")" "no package rule limits the mariadb image"
+fresh
+edit_json "$C/renovate.json" 'c.packageRules.find((r) => r.allowedVersions).allowedVersions = "/^11\\./"'
+some "a mariadb rule that lets 11.8 through is noticed" "$(renovate_problems "$C")" "allows 11.8, which is not in the 11.4 series"
+fresh
+edit_json "$C/renovate.json" 'c.packageRules.find((r) => r.allowedVersions).allowedVersions = "/^11\\.4$/"'
+some "a mariadb rule that rejects 11.4.13 is noticed" "$(renovate_problems "$C")" "rejects 11.4.13"
+fresh
+sed -i 's/^    image: mariadb:11.4$/    image: mariadb:11.8/' "$C/docker-compose.dev.yml"
+some "a file that names a mariadb tag the rule forbids is noticed (docker-compose.dev.yml)" "$(renovate_problems "$C")" "docker-compose.dev.yml names mariadb:11.8"
+fresh
+sed -i '0,/^        image: mariadb:11.4$/s//        image: mariadb:11.8/' "$C/.github/workflows/deploy.yml"
+some "a file that names a mariadb tag the rule forbids is noticed (deploy.yml)" "$(renovate_problems "$C")" "deploy.yml names mariadb:11.8"
 
 # 7. wording
 fresh
