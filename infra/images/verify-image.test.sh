@@ -405,6 +405,15 @@ expect_line 'PASS keep-id'
 # testing, a file called test, and a file called tests.js. The same image carries the esbuild
 # look-alikes (below), so one run shows that neither check is too broad.
 printf '#!/usr/bin/env node\nrequire("./main");\n' >"$work/ctx/esbuild-wrapper.js"
+# Packages for the entrypoints check. The look-alikes (which must pass): one that says "test" only to
+# exclude it ("!test" in files), and the one package and path on the known list ("ai", "./dist/test/").
+printf '{"name":"fine","version":"1.0.0","main":"./lib/index.js","exports":{".":"./lib/index.js","./package.json":"./package.json"},"files":["lib","!test"]}\n' >"$work/ctx/fine-package.json"
+printf '{"name":"ai","version":"6.0.0","exports":{"./test":{"import":"./dist/test/index.mjs","require":"./dist/test/index.js"}}}\n' >"$work/ctx/ai-package.json"
+# The broken ones: every field the check reads, a scoped package, a path with no leading "./", and
+# a package that is not on the known list but has a known path.
+printf '{"name":"broken","version":"1.0.0","main":"./test/index.js","bin":{"x":"./tests/cli.js"},"exports":{"./util":{"import":"./__tests__/util.mjs"}},"files":["src","test"]}\n' >"$work/ctx/broken-package.json"
+printf '{"name":"@scope/scoped","version":"2.0.0","module":"dist/__tests__/m.js"}\n' >"$work/ctx/scoped-package.json"
+printf '{"name":"other","exports":{"./test":"./dist/test/index.js"}}\n' >"$work/ctx/other-package.json"
 {
   printf 'FROM %s AS plant\nUSER node\n' "$node_slim"
   printf 'RUN mkdir -p /home/node/p/contest /home/node/p/latest /home/node/p/testing /home/node/p/bin \\\n'
@@ -413,12 +422,35 @@ printf '#!/usr/bin/env node\nrequire("./main");\n' >"$work/ctx/esbuild-wrapper.j
   printf 'COPY --from=plant /home/node/p /app/p\n'
   # An ELF outside esbuild's folders, and a JavaScript file called esbuild inside them.
   printf 'COPY --from=plant /bin/true /app/p/bin/true\n'
-  printf 'COPY esbuild-wrapper.js /app/node_modules/esbuild/bin/esbuild\nCMD ["/app/server.mjs"]\n'
+  printf 'COPY esbuild-wrapper.js /app/node_modules/esbuild/bin/esbuild\n'
+  printf 'COPY fine-package.json /app/node_modules/fine/package.json\n'
+  printf 'COPY ai-package.json /app/node_modules/ai/package.json\nCMD ["/app/server.mjs"]\n'
 } | build lookalikes
 run_verifier oc-verify-test-lookalikes:test web
 expect_exit 0
 expect_line 'PASS forbidden'
 expect_line 'PASS esbuild'
+expect_line 'PASS entrypoints'
+expect_text 'read 2 package.json files; 0 reference(s) into a test folder, 2 known test helper export(s) not counted'
+
+# Entry points into a test folder, which the Dockerfiles remove: every field the check reads, a
+# scoped package and a path without "./". The image has no test folder (it is as the prune leaves
+# it), so only the package.json files say that something is gone. A package that is not on the
+# known list but uses the known path ("other", "./dist/test/index.js") must fail too.
+{
+  printf 'FROM %s\nCOPY server.mjs healthcheck.mjs /app/\nWORKDIR /app\nUSER 65532:65532\n' "$distroless13"
+  printf 'COPY broken-package.json /app/node_modules/broken/package.json\n'
+  printf 'COPY scoped-package.json /app/node_modules/@scope/scoped/package.json\n'
+  printf 'COPY other-package.json /app/node_modules/other/package.json\nCMD ["/app/server.mjs"]\n'
+} | build entrypoints
+run_verifier oc-verify-test-entrypoints:test web
+expect_exit 1
+expect_line 'FAIL entrypoints'
+expect_text '(read 3 package.json files; 6 reference(s) into a test folder, 0 known test helper export(s) not counted)'
+for name in 'broken@1.0.0: main -> ./test/index.js' 'broken@1.0.0: bin -> ./tests/cli.js' 'broken@1.0.0: exports -> ./__tests__/util.mjs' 'broken@1.0.0: files -> test' '@scope/scoped@2.0.0: module -> dist/__tests__/m.js' 'other@?: exports -> ./dist/test/index.js'; do
+  if grep -qF "$name" <<<"$out"; then ok "entrypoints lists $name"; else notok "entrypoints does not list $name"; fi
+done
+expect_line 'PASS forbidden'
 
 # An esbuild binary: the ELF that esbuild's install script leaves at node_modules/esbuild/bin/esbuild
 # and the platform package's own, and one that was moved and renamed inside the package.

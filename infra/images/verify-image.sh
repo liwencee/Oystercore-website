@@ -16,6 +16,9 @@
 #                 tests folder, anywhere in the filesystem
 #   esbuild       no ELF binary under a path with an esbuild folder or file name (esbuild is a
 #                 build tool; its Go binary is scanned, and needs updating, like the app)
+#   entrypoints   no package.json (main, module, browser, types, bin, exports, files) points into a
+#                 folder called test, tests or __tests__, which the Dockerfiles remove; the few
+#                 known test-helper exports are listed in the script, and nothing imports them
 #   size          the filesystem is under the limit below (1.5 times the measured size)
 #   healthcheck   the health-check script exits 1 when nothing is listening (a control, so a
 #                 script that always exits 0 cannot pass)
@@ -363,6 +366,88 @@ check_esbuild() {
   fi
 }
 check_esbuild
+
+# ---- entrypoints --------------------------------------------------------------------------
+# The Dockerfiles remove every folder called test, tests or __tests__ from the production
+# dependencies. A package whose package.json points into such a folder (main, module, browser,
+# types, bin, exports in any condition or subpath, or a files entry) would have an entry that is
+# gone: that is the one way the prune can break the app without a health check noticing. The
+# prune cannot tell, so this reads every package.json in the image (with the image's own Node;
+# the image has no shell) and fails on any such reference. (A package whose own folder is called
+# test, tests or __tests__ is removed whole and cannot be seen here; none exists.) It runs on every
+# image build in CI, so a dependency update
+# that adds such an entry fails there. Known references are listed in the script: they are test
+# helper subpath exports (`ai/test`, `@strapi/admin/strapi-admin/test`, ...), and each one was
+# checked, when the list was made, to be imported by nothing in the image (see the report of
+# task 4b-B, fix round 1). The list is exact (package, path); a new package or path fails.
+read -r -d '' entrypoints_script <<'JS' || true
+const fs = require("fs");
+const path = require("path");
+const bad = /(^|\/)(test|tests|__tests__)(\/|$)/;
+// Known: test helper subpath exports that nothing in the image imports.
+const known = {
+  "@ai-sdk/provider-utils": /^\.\/dist\/test\/index\./,
+  "ai": /^\.\/dist\/test\/index\./,
+  "@strapi/admin": /^\.\/(dist\/)?admin\/tests\/index\./,
+  "asap": /^\.\/test\/browser-domain\.js$/,
+};
+const hits = [];
+let seen = 0;
+let allowed = 0;
+function strings(v, out) {
+  if (typeof v === "string") out.push(v);
+  else if (Array.isArray(v)) v.forEach((x) => strings(x, out));
+  else if (v && typeof v === "object") Object.values(v).forEach((x) => strings(x, out));
+}
+function check(file) {
+  const dir = path.dirname(file);
+  const parent = path.basename(path.dirname(dir));
+  const isPackage = parent === "node_modules" || (parent.startsWith("@") && path.basename(path.dirname(path.dirname(dir))) === "node_modules");
+  if (!isPackage) return;
+  let j;
+  try { j = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
+  seen++;
+  const name = j.name || path.basename(dir);
+  const label = name + "@" + (j.version || "?");
+  for (const field of ["main", "module", "browser", "types", "typings", "bin", "exports", "files"]) {
+    const refs = [];
+    strings(j[field], refs);
+    for (const r of refs) {
+      if (r.startsWith("!") || !bad.test(r.replace(/^\.\//, ""))) continue;
+      if (known[name] && known[name].test(r)) allowed++;
+      else hits.push(label + ": " + field + " -> " + r);
+    }
+  }
+}
+function walk(dir) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (e.isSymbolicLink()) continue;
+    if (e.isDirectory()) walk(p);
+    else if (e.name === "package.json") check(p);
+  }
+}
+walk(process.argv[1]);
+for (const h of hits) console.log(h);
+console.log("read " + seen + " package.json files; " + hits.length + " reference(s) into a test folder, " + allowed + " known test helper export(s) not counted");
+process.exit(hits.length ? 1 : 0);
+JS
+check_entrypoints() {
+  local out rc=0 last
+  out=$(docker run --rm --entrypoint "$NODE_BIN" "$image" -e "$entrypoints_script" /app/node_modules 2>&1) || rc=$?
+  last=${out##*$'\n'}
+  if ((rc == 0)) && [[ $last == 'read '* ]]; then
+    pass entrypoints "no package.json points into a test, tests or __tests__ folder: $last"
+  elif ((rc == 1)) && [[ $last == 'read '* ]]; then
+    fail entrypoints "a package.json points into a folder that the Dockerfile removes ($last):"
+    printf '%s\n' "$out" | sed '$d' | sed -n '1,15p' | indent
+  else
+    fail entrypoints "the scan could not run (exit $rc): $(printf '%s' "$out" | sed -n '1,3p' | tr '\n' ' ')"
+  fi
+}
+check_entrypoints
 
 # ---- size -----------------------------------------------------------------------------
 check_size() {
