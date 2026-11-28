@@ -22,8 +22,9 @@
 #   read-only     the image starts under the Quadlet sandbox (read-only root, no capabilities,
 #                 no new privileges, a small /tmp) and /app/healthcheck.mjs passes. In the
 #                 running container the process is not root, /proc/mounts shows the root
-#                 filesystem read-only, /app cannot be written and /tmp can. (Capabilities and
-#                 no-new-privileges are asked for, not read back.)
+#                 filesystem read-only, /app is not owned by the process's user and cannot be
+#                 written, and /tmp can. (Capabilities and no-new-privileges are asked for,
+#                 not read back.)
 #   keep-id       the same, as a host user's uid that has no entry in the image (what
 #                 `--userns=keep-id` does on the server)
 #
@@ -438,19 +439,22 @@ run_sandboxed() {
     fi
     if docker exec "$name" "$NODE_BIN" "$HEALTHCHECK_JS" >/dev/null 2>&1; then
       # What the running process sees. That the root is read-only is read from /proc/mounts (the
-      # mount's own options): a refused write to /app proves less, because /app belongs to root
-      # and a process that is not root cannot write there on a writable root either. The write to
-      # /app stays as the check that the code folder is not the process's to change.
+      # mount's own options): a refused write to /app proves less, because on a read-only root
+      # every write is refused, and on a writable one it is refused only if /app is not the
+      # process's own. So /app's owner is read as well: the folder must not belong to the user the
+      # process runs as (a folder made by WORKDIR after USER does, and the process could then
+      # replace the files in it). The write to /app is kept as a last, weaker check.
       # Capabilities and no-new-privileges are asked for in $sandbox but are not read back here.
       probe='const fs=require("fs");
         if (process.getuid()===0) { console.log("running as root"); process.exit(1); }
         const root=fs.readFileSync("/proc/mounts","utf8").split("\n").map((l)=>l.split(" ")).filter((m)=>m[1]==="/").pop();
         if (!root) { console.log("/proc/mounts has no entry for the root filesystem"); process.exit(1); }
         if (!root[3].split(",").includes("ro")) { console.log("the root filesystem is mounted read-write (/proc/mounts: "+root[3]+")"); process.exit(1); }
+        if (fs.statSync("/app").uid===process.getuid()) { console.log("/app belongs to the user the process runs as (uid "+process.getuid()+"), so the process could replace what is in it"); process.exit(1); }
         try { fs.writeFileSync("/app/.write-probe","x"); console.log("/app is writable"); process.exit(1); } catch {}
         try { fs.writeFileSync("/tmp/.write-probe","x"); } catch { console.log("/tmp is not writable"); process.exit(1); }'
       if out=$(docker exec "$name" "$NODE_BIN" -e "$probe" 2>&1); then
-        pass "$id" "healthy within $((SECONDS - deadline + start_timeout)) s; not root, root filesystem read-only (/proc/mounts), /app not writable, /tmp writable"
+        pass "$id" "healthy within $((SECONDS - deadline + start_timeout)) s; not root, root filesystem read-only (/proc/mounts), /app not the process's own and not writable, /tmp writable"
       else
         fail "$id" "healthy, but the sandbox is not what it should be: $out"
       fi

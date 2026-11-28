@@ -75,16 +75,21 @@ RUN pnpm --filter @oc/web deploy --prod /home/node/app \
 # ---- final stage -----------------------------------------------------------------------
 FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:c73ddeb03e1dc2d579aa111c83d6699c6b8b487e35c0c631d4a3a20229fc25ee AS final
 
+# The first COPY creates /app, owned by root, and WORKDIR then finds it there. WORKDIR on its
+# own would create the folder for the user in force at that moment, which is the base image's
+# 65532 whatever this file says (and a folder made after USER 65532 is 65532's too), and the
+# process could then replace what is in it, files owned by root or not. verify-image.sh checks
+# the owner of /app.
+COPY --from=build --chown=0:0 /home/node/app/package.json /app/package.json
+WORKDIR /app
 # The group is written down as well as the user: a uid with no group runs with gid 0 when the
 # image's /etc/passwd has no entry for it, and infra/images/verify-image.sh refuses that.
 USER 65532:65532
 ENV NODE_ENV=production
-WORKDIR /app
 
 # Only the built app (not the sources), the production dependencies and the health check.
 # Owned by root and not writable: the process cannot change its own code, whatever user the
 # container runs as (the server runs it as the environment's own user, --userns=keep-id).
-COPY --from=build --chown=0:0 /home/node/app/package.json ./package.json
 COPY --from=build --chown=0:0 /home/node/app/node_modules ./node_modules
 COPY --from=build --chown=0:0 /home/node/build/apps/web/dist ./dist
 COPY --chown=0:0 apps/web/healthcheck.mjs ./healthcheck.mjs

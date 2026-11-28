@@ -211,9 +211,9 @@ build() {
 good_dockerfile() {
   cat <<EOF
 FROM ${1:-$distroless13}
-USER ${2:-65532:65532}
+COPY server.mjs healthcheck.mjs /app/
 WORKDIR /app
-COPY server.mjs healthcheck.mjs ./
+USER ${2:-65532:65532}
 ARG STATUS=200
 ENV STATUS=\$STATUS NODE_ENV=production
 CMD ["/app/server.mjs"]
@@ -236,6 +236,20 @@ good_dockerfile "$distroless13" nonroot | build named-user
 run_verifier oc-verify-test-named-user:test web
 expect_exit 1
 expect_line 'FAIL non-root'
+
+# An /app made by WORKDIR belongs to the user in force at that moment (the base image's 65532,
+# whatever order USER and WORKDIR come in), so the process could replace the files in it:
+# root-owned files do not help, the folder's owner may rename and delete them. Every other test
+# image here makes /app with a root-owned COPY first, as the real images now do. The keep-id run
+# has another uid and still passes, which shows the check is about the owner.
+{
+  printf 'FROM %s\nUSER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\nCMD ["/app/server.mjs"]\n' "$distroless13"
+} | build app-owned
+run_verifier oc-verify-test-app-owned:test web
+expect_exit 1
+expect_line 'FAIL read-only'
+expect_text 'belongs to the user the process runs as'
+expect_line 'PASS keep-id'
 
 # A uid with no group named. The distroless base has a passwd entry for 65532, so that process
 # really gets gid 65532, but the verifier does not rely on the base's /etc/passwd: it wants the
@@ -290,7 +304,7 @@ expect_line 'FAIL healthcheck'
 {
   printf 'FROM %s AS donor\nFROM %s\n' "$node_slim" "$distroless13"
   printf 'COPY --from=donor /bin/dash /bin/sh\n'
-  printf 'USER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\nCMD ["/app/server.mjs"]\n'
+  printf 'COPY server.mjs healthcheck.mjs /app/\nWORKDIR /app\nUSER 65532:65532\nCMD ["/app/server.mjs"]\n'
 } | build shell
 run_verifier oc-verify-test-shell:test web
 expect_exit 1
@@ -302,7 +316,7 @@ expect_line 'FAIL no-shell'
   printf 'RUN mkdir -p /home/node/p/.git /home/node/p/.cache /home/node/p/lib \\\n'
   printf ' && touch /home/node/p/.env /home/node/p/.env.production /home/node/p/.git/HEAD /home/node/p/.cache/x \\\n'
   printf ' /home/node/p/lib/a.test.js /home/node/p/lib/b.spec.ts\n'
-  printf 'FROM %s\nUSER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\n' "$distroless13"
+  printf 'FROM %s\nCOPY server.mjs healthcheck.mjs /app/\nWORKDIR /app\nUSER 65532:65532\n' "$distroless13"
   printf 'COPY --from=plant /home/node/p /app/p\nCMD ["/app/server.mjs"]\n'
 } | build forbidden
 run_verifier oc-verify-test-forbidden:test web
@@ -318,7 +332,7 @@ done
   printf 'FROM %s AS plant\nUSER node\n' "$node_slim"
   printf 'RUN mkdir -p /home/node/p/a/test /home/node/p/b/__tests__ /home/node/p/c/tests \\\n'
   printf ' && touch /home/node/p/a/test/x.js /home/node/p/b/__tests__/y.js /home/node/p/c/tests/z.js\n'
-  printf 'FROM %s\nUSER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\n' "$distroless13"
+  printf 'FROM %s\nCOPY server.mjs healthcheck.mjs /app/\nWORKDIR /app\nUSER 65532:65532\n' "$distroless13"
   printf 'COPY --from=plant /home/node/p /app/p\nCMD ["/app/server.mjs"]\n'
 } | build testdirs
 run_verifier oc-verify-test-testdirs:test web
@@ -338,7 +352,7 @@ done
   printf ' && cd /home/node/p/a-folder-with-a-name-long-enough-to-fill-a-pipe-buffer-quickly \\\n'
   # shellcheck disable=SC2016  # the $ signs are the Dockerfile shell's, not this one's
   printf ' && for i in $(seq 1 1500); do : > "a-file-with-a-long-name-for-the-sake-of-the-test-$i.test.js"; done\n'
-  printf 'FROM %s\nUSER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\n' "$distroless13"
+  printf 'FROM %s\nCOPY server.mjs healthcheck.mjs /app/\nWORKDIR /app\nUSER 65532:65532\n' "$distroless13"
   printf 'COPY --from=plant /home/node/p /app/p\nCMD ["/app/server.mjs"]\n'
 } | build manyfiles
 run_verifier oc-verify-test-manyfiles:test web
@@ -356,7 +370,7 @@ printf '#!/usr/bin/env node\nrequire("./main");\n' >"$work/ctx/esbuild-wrapper.j
   printf 'FROM %s AS plant\nUSER node\n' "$node_slim"
   printf 'RUN mkdir -p /home/node/p/contest /home/node/p/latest /home/node/p/testing /home/node/p/bin \\\n'
   printf ' && touch /home/node/p/contest/a.js /home/node/p/latest/b.js /home/node/p/testing/c.js /home/node/p/bin/test /home/node/p/tests.js\n'
-  printf 'FROM %s\nUSER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\n' "$distroless13"
+  printf 'FROM %s\nCOPY server.mjs healthcheck.mjs /app/\nWORKDIR /app\nUSER 65532:65532\n' "$distroless13"
   printf 'COPY --from=plant /home/node/p /app/p\n'
   # An ELF outside esbuild's folders, and a JavaScript file called esbuild inside them.
   printf 'COPY --from=plant /bin/true /app/p/bin/true\n'
@@ -370,7 +384,7 @@ expect_line 'PASS esbuild'
 # An esbuild binary: the ELF that esbuild's install script leaves at node_modules/esbuild/bin/esbuild
 # and the platform package's own, and one that was moved and renamed inside the package.
 {
-  printf 'FROM %s AS donor\nFROM %s\nUSER 65532:65532\nWORKDIR /app\nCOPY server.mjs healthcheck.mjs ./\n' "$node_slim" "$distroless13"
+  printf 'FROM %s AS donor\nFROM %s\nCOPY server.mjs healthcheck.mjs /app/\nWORKDIR /app\nUSER 65532:65532\n' "$node_slim" "$distroless13"
   printf 'COPY --from=donor /bin/true /app/node_modules/@esbuild/linux-x64/bin/esbuild\n'
   printf 'COPY --from=donor /bin/true /app/node_modules/esbuild/lib/helper.bin\n'
   printf 'CMD ["/app/server.mjs"]\n'
